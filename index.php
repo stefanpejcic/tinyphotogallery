@@ -1,4 +1,3 @@
-```php
 <?php
 
 $photosDir = __DIR__ . '/photos';
@@ -69,6 +68,166 @@ function albums(string $photosDir): array
     return array_values($albums);
 }
 
+function exifNumber(mixed $value): ?float
+{
+    if ($value === null || $value === '') {
+        return null;
+    }
+
+    if (is_numeric($value)) {
+        return (float) $value;
+    }
+
+    if (is_string($value) && str_contains($value, '/')) {
+        [$numerator, $denominator] = array_pad(explode('/', $value, 2), 2, null);
+
+        if (is_numeric($numerator) && is_numeric($denominator) && (float) $denominator != 0) {
+            return (float) $numerator / (float) $denominator;
+        }
+    }
+
+    return null;
+}
+
+function formatGpsCoordinate(mixed $coordinate, string $hemisphere): ?float
+{
+    if (!is_array($coordinate) || count($coordinate) < 3) {
+        return null;
+    }
+
+    $degrees = exifNumber($coordinate[0]);
+    $minutes = exifNumber($coordinate[1]);
+    $seconds = exifNumber($coordinate[2]);
+
+    if ($degrees === null || $minutes === null || $seconds === null) {
+        return null;
+    }
+
+    $decimal = $degrees + ($minutes / 60) + ($seconds / 3600);
+
+    if (in_array(strtoupper($hemisphere), ['S', 'W'], true)) {
+        $decimal *= -1;
+    }
+
+    return round($decimal, 7);
+}
+
+function getImageMetadata(string $path): array
+{
+    $metadata = [
+        'camera' => null,
+        'date' => null,
+        'iso' => null,
+        'focal_length' => null,
+        'aperture' => null,
+        'shutter' => null,
+        'width' => null,
+        'height' => null,
+        'latitude' => null,
+        'longitude' => null,
+        'gps_url' => null,
+    ];
+
+    $imageInfo = @getimagesize($path);
+
+    if ($imageInfo) {
+        $metadata['width'] = $imageInfo[0] ?? null;
+        $metadata['height'] = $imageInfo[1] ?? null;
+    }
+
+    if (!function_exists('exif_read_data')) {
+        return $metadata;
+    }
+
+    // EXIF is generally available for JPEG/TIFF images. Suppress warnings
+    // for formats/files where EXIF is not supported.
+    $exif = @exif_read_data($path, null, true);
+
+    if (!$exif) {
+        return $metadata;
+    }
+
+    $make = trim((string) ($exif['IFD0']['Make'] ?? ''));
+    $model = trim((string) ($exif['IFD0']['Model'] ?? ''));
+
+    if ($make && $model) {
+        $metadata['camera'] = $make . ' ' . $model;
+    } elseif ($model) {
+        $metadata['camera'] = $model;
+    } elseif ($make) {
+        $metadata['camera'] = $make;
+    }
+
+    $date = $exif['EXIF']['DateTimeOriginal']
+        ?? $exif['EXIF']['CreateDate']
+        ?? $exif['IFD0']['DateTime']
+        ?? null;
+
+    if ($date) {
+        $timestamp = strtotime((string) $date);
+
+        if ($timestamp !== false) {
+            $metadata['date'] = date('F j, Y H:i', $timestamp);
+        }
+    }
+
+    $metadata['iso'] = $exif['EXIF']['ISOSpeedRatings']
+        ?? $exif['EXIF']['PhotographicSensitivity']
+        ?? null;
+
+    $focalLength = exifNumber($exif['EXIF']['FocalLength'] ?? null);
+
+    if ($focalLength !== null) {
+        $metadata['focal_length'] = rtrim(rtrim(number_format($focalLength, 1), '0'), '.') . ' mm';
+    }
+
+    $aperture = exifNumber(
+        $exif['EXIF']['FNumber']
+        ?? $exif['EXIF']['ApertureValue']
+        ?? null
+    );
+
+    if ($aperture !== null) {
+        $metadata['aperture'] = 'f/' . rtrim(rtrim(number_format($aperture, 1), '0'), '.');
+    }
+
+    $shutter = exifNumber($exif['EXIF']['ExposureTime'] ?? null);
+
+    if ($shutter !== null) {
+        if ($shutter > 0 && $shutter < 1) {
+            $metadata['shutter'] = '1/' . round(1 / $shutter) . 's';
+        } else {
+            $metadata['shutter'] = rtrim(rtrim(number_format($shutter, 2), '0'), '.') . 's';
+        }
+    }
+
+    // GPS coordinates are stored as DMS arrays in EXIF.
+    $gps = $exif['GPS'] ?? [];
+
+    $latitude = formatGpsCoordinate(
+        $gps['GPSLatitude'] ?? null,
+        (string) ($gps['GPSLatitudeRef'] ?? '')
+    );
+
+    $longitude = formatGpsCoordinate(
+        $gps['GPSLongitude'] ?? null,
+        (string) ($gps['GPSLongitudeRef'] ?? '')
+    );
+
+    if ($latitude !== null && $longitude !== null) {
+        $metadata['latitude'] = $latitude;
+        $metadata['longitude'] = $longitude;
+
+        // Google Maps link. Coordinates are kept numeric and generated
+        // server-side rather than accepting arbitrary URLs from EXIF.
+        $metadata['gps_url'] =
+            'https://www.google.com/maps/search/?api=1&query=' .
+            rawurlencode($latitude . ',' . $longitude);
+    }
+
+    return $metadata;
+}
+
 $album = $_GET['album'] ?? null;
 
 if ($album !== null) {
@@ -108,8 +267,6 @@ if ($album !== null) {
 
     <?php if ($album === null): ?>
 
-        <!-- Albums -->
-
         <header class="mb-8">
             <h1 class="text-3xl font-bold">Gallery</h1>
             <p class="mt-2 text-gray-400">
@@ -144,7 +301,6 @@ if ($album !== null) {
                         href="?album=<?= rawurlencode($albumName) ?>"
                         class="group block rounded-xl overflow-hidden bg-gray-900 border border-gray-800 hover:border-gray-600 transition"
                     >
-
                         <div class="aspect-square bg-gray-800 overflow-hidden">
 
                             <?php if ($cover): ?>
@@ -176,7 +332,6 @@ if ($album !== null) {
                                 photo<?= count($albumImages) === 1 ? '' : 's' ?>
                             </p>
                         </div>
-
                     </a>
 
                 <?php endforeach; ?>
@@ -186,8 +341,6 @@ if ($album !== null) {
         <?php endif; ?>
 
     <?php else: ?>
-
-        <!-- Album -->
 
         <header class="mb-8">
 
@@ -227,6 +380,10 @@ if ($album !== null) {
                         $photosUrl . '/' .
                         rawurlencode($album) . '/' .
                         rawurlencode($image);
+
+                    $metadata = getImageMetadata(
+                        $albumPath . DIRECTORY_SEPARATOR . $image
+                    );
                     ?>
 
                     <button
@@ -242,6 +399,10 @@ if ($album !== null) {
                         >
                     </button>
 
+                    <?php
+                    $imagesMetadata[$index] = $metadata;
+                    ?>
+
                 <?php endforeach; ?>
 
             </div>
@@ -254,7 +415,7 @@ if ($album !== null) {
                 @keydown.escape.window="close()"
                 @keydown.arrow-left.window="previous()"
                 @keydown.arrow-right.window="next()"
-                class="fixed inset-0 z-50 bg-black/95 flex items-center justify-center"
+                class="fixed inset-0 z-50 bg-black/95 flex items-center justify-center p-4"
             >
 
                 <!-- Close -->
@@ -275,15 +436,96 @@ if ($album !== null) {
                     ‹
                 </button>
 
-                <!-- Image -->
+                <div class="max-w-[90vw] max-h-[92vh] flex flex-col items-center">
 
-                <template x-if="active !== null">
-                    <img
-                        :src="images[active]"
-                        class="max-w-[90vw] max-h-[90vh] object-contain"
-                        :alt="names[active]"
-                    >
-                </template>
+                    <!-- Image -->
+
+                    <template x-if="active !== null">
+                        <img
+                            :src="images[active]"
+                            class="max-w-[90vw] max-h-[72vh] object-contain rounded-lg"
+                            :alt="names[active]"
+                        >
+                    </template>
+
+                    <!-- Metadata -->
+
+                    <template x-if="active !== null">
+                        <div
+                            class="mt-4 w-full max-w-2xl rounded-xl bg-gray-900/90 border border-gray-800 px-5 py-4"
+                        >
+                            <div class="flex items-center justify-between gap-4">
+                                <div class="min-w-0">
+                                    <h2
+                                        class="font-medium truncate"
+                                        x-text="names[active]"
+                                    ></h2>
+
+                                    <p
+                                        x-show="metadata[active]?.date"
+                                        x-text="metadata[active]?.date"
+                                        class="text-sm text-gray-500 mt-1"
+                                    ></p>
+                                </div>
+
+                                <a
+                                    x-show="metadata[active]?.gps_url"
+                                    :href="metadata[active]?.gps_url"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    class="shrink-0 text-sm text-blue-400 hover:text-blue-300"
+                                >
+                                    📍 Map
+                                </a>
+                            </div>
+
+                            <div class="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-gray-400">
+
+                                <span
+                                    x-show="metadata[active]?.camera"
+                                    x-text="'📷 ' + metadata[active]?.camera"
+                                ></span>
+
+                                <span
+                                    x-show="metadata[active]?.focal_length"
+                                    x-text="'🔭 ' + metadata[active]?.focal_length"
+                                ></span>
+
+                                <span
+                                    x-show="metadata[active]?.aperture"
+                                    x-text="'◉ ' + metadata[active]?.aperture"
+                                ></span>
+
+                                <span
+                                    x-show="metadata[active]?.shutter"
+                                    x-text="'⚡ ' + metadata[active]?.shutter"
+                                ></span>
+
+                                <span
+                                    x-show="metadata[active]?.iso"
+                                    x-text="'ISO ' + metadata[active]?.iso"
+                                ></span>
+
+                                <span
+                                    x-show="metadata[active]?.width && metadata[active]?.height"
+                                    x-text="metadata[active]?.width + ' × ' + metadata[active]?.height"
+                                ></span>
+
+                            </div>
+
+                            <div
+                                x-show="metadata[active]?.latitude !== null"
+                                class="mt-3 pt-3 border-t border-gray-800 text-xs text-gray-500"
+                            >
+                                📍
+                                <span x-text="metadata[active]?.latitude"></span>,
+                                <span x-text="metadata[active]?.longitude"></span>
+                            </div>
+
+                        </div>
+                    </template>
+
+                </div>
 
                 <!-- Next -->
 
@@ -325,7 +567,15 @@ function gallery() {
             JSON_UNESCAPED_SLASHES
         ) ?>,
 
-        names: <?= json_encode($images ?? [], JSON_UNESCAPED_SLASHES) ?>,
+        names: <?= json_encode(
+            $images ?? [],
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+        ) ?>,
+
+        metadata: <?= json_encode(
+            $imagesMetadata ?? [],
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+        ) ?>,
 
         open(index) {
             this.active = index;
@@ -364,4 +614,3 @@ function gallery() {
 
 </body>
 </html>
-```
