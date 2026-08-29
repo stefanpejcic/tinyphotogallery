@@ -784,15 +784,18 @@ if ($album && !empty($images[0])) { $ogImageUrl = absoluteUrl($config['site_url'
                 <?php foreach ($pagedImages as $index => $image): ?>
 
                     <?php
-                    // Only the grid thumbnail is generated eagerly here.
-                    // The larger lightbox version is generated on demand
-                    // via ajax_metadata when a photo is actually opened —
-                    // this is what keeps large albums fast to load.
+                    // Only the grid thumbnail URL is computed eagerly here.
+                    // The <img> below gets data-src (not src) so nothing is
+                    // actually requested yet — see revealGridThumbs() in the
+                    // script below, which decides whether to reveal these
+                    // immediately or defer until the lightbox closes (deep
+                    // link case). The larger lightbox version is generated
+                    // on demand via ajax_metadata when a photo is opened.
                     $gridThumbUrl = thumbnailSrc($photosUrl, $photosDir, $album, $image, 'grid');
                     $altText = humanizeFilename($image) . ' - ' . $album;
                     ?>
 
-                    <button type="button" @click="open(<?= $index ?>)" class="group aspect-square overflow-hidden rounded-lg bg-gray-900 focus:outline-none focus:ring-2 focus:ring-white"><img src="<?= e($gridThumbUrl) ?>" alt="<?= e($altText) ?>" title="<?= e($altText) ?>" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300"></button>
+                    <button type="button" @click="open(<?= $index ?>)" class="group aspect-square overflow-hidden rounded-lg bg-gray-900 focus:outline-none focus:ring-2 focus:ring-white"><img data-src="<?= e($gridThumbUrl) ?>" alt="<?= e($altText) ?>" title="<?= e($altText) ?>" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300"></button>
 
                     <?php
                     $imagesAlt[$index] = $altText;
@@ -933,17 +936,44 @@ function gallery() {
 
         metadata: {},
         _pending: {},
+        _gridRevealed: false,
 
         init() {
-            this.openFromHash();
-            window.addEventListener('hashchange', () => this.openFromHash());
+            // If the page was opened as a direct link to a specific photo
+            // (#filename in the URL), only that one photo should load —
+            // don't reveal (and thus don't request) the grid thumbnails
+            // sitting behind the lightbox overlay. They get revealed once
+            // the lightbox is closed. On a normal page load (no hash, or
+            // a stale/invalid one) reveal them immediately as before.
+            const openedFromHash = this.openFromHash();
+            if (!openedFromHash) this.revealGridThumbs();
+
+            window.addEventListener('hashchange', () => {
+                const opened = this.openFromHash();
+                if (!opened) this.revealGridThumbs();
+            });
+        },
+
+        // Swaps data-src -> src for grid thumbnails still awaiting load.
+        // No-op after the first call. loading="lazy" still applies once
+        // src is set via JS, so images off-screen keep loading lazily as
+        // the user scrolls — this only controls *when* that process starts.
+        revealGridThumbs() {
+            if (this._gridRevealed) return;
+            this._gridRevealed = true;
+            this.$el.querySelectorAll('img[data-src]').forEach(img => {
+                img.src = img.dataset.src;
+                img.removeAttribute('data-src');
+            });
         },
 
         openFromHash() {
             const hash = decodeURIComponent(window.location.hash.replace(/^#/, ''));
-            if (!hash) { this.active = null; return; }
+            if (!hash) { this.active = null; return false; }
             const index = this.names.indexOf(hash);
-            if (index !== -1) this.open(index, false);
+            if (index === -1) return false;
+            this.open(index, false);
+            return true;
         },
 
         open(index, updateHash = true) {
@@ -994,6 +1024,10 @@ function gallery() {
             this.active = null;
             document.body.classList.remove('overflow-hidden');
             history.pushState(null, '', window.location.pathname + window.location.search);
+            // Only now do the grid thumbnails behind the lightbox get
+            // revealed/loaded — covers the deep-link case where the page
+            // opened straight into a single photo.
+            this.revealGridThumbs();
         },
 
         previous() {
