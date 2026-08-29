@@ -5,13 +5,9 @@
 // https://github.com/stefanpejcic/tinyphotogallery/
 $config = [
     'indexing' => false,
-
     'password' => null,
-
     'site_url' => '',
-
     'photos_per_page' => 100,
-
     'debug' => false,
 ];
 
@@ -83,9 +79,7 @@ function requireAuth(array $config): void
         <form method="post" class="w-full max-w-sm rounded-xl border border-gray-800 bg-gray-900 p-6">
             <h1 class="text-xl font-semibold mb-1">🔒 Protected Gallery</h1>
             <p class="text-sm text-gray-400 mb-4">Enter the password to continue.</p>
-            <?php if ($error !== null): ?>
-                <p class="text-sm text-red-400 mb-3"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></p>
-            <?php endif; ?>
+            <?php if ($error !== null): ?><p class="text-sm text-red-400 mb-3"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></p><?php endif; ?>
             <input type="password" name="gallery_password" autofocus class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-white mb-4 focus:outline-none focus:ring-2 focus:ring-white" placeholder="Password">
             <button type="submit" class="w-full rounded-lg bg-white text-gray-950 font-medium py-2 hover:bg-gray-200 transition">Enter</button>
         </form>
@@ -104,22 +98,16 @@ function e(string $value): string
 
 function imageFiles(string $directory, array $allowedExtensions): array
 {
-    if (!is_dir($directory)) {
-        return [];
-    }
+    if (!is_dir($directory)) { return []; }
 
     $files = [];
 
     foreach (scandir($directory) ?: [] as $file) {
-        if ($file === '.' || $file === '..') {
-            continue;
-        }
+        if ($file === '.' || $file === '..') { continue; }
 
         $path = $directory . DIRECTORY_SEPARATOR . $file;
 
-        if (!is_file($path)) {
-            continue;
-        }
+        if (!is_file($path)) { continue; }
 
         $extension = strtolower(pathinfo($file, PATHINFO_EXTENSION));
 
@@ -135,26 +123,18 @@ function imageFiles(string $directory, array $allowedExtensions): array
 
 function albums(string $photosDir, string $relativePath = ''): array
 {
-    $basePath = $relativePath !== ''
-        ? $photosDir . DIRECTORY_SEPARATOR . $relativePath
-        : $photosDir;
+    $basePath = $relativePath !== '' ? $photosDir . DIRECTORY_SEPARATOR . $relativePath : $photosDir;
 
-    if (!is_dir($basePath)) {
-        return [];
-    }
+    if (!is_dir($basePath)) { return []; }
 
     $albums = [];
 
     foreach (scandir($basePath) ?: [] as $directory) {
-        if ($directory === '.' || $directory === '..') {
-            continue;
-        }
+        if ($directory === '.' || $directory === '..') { continue; }
 
         $path = $basePath . DIRECTORY_SEPARATOR . $directory;
 
-        if (!is_dir($path) || str_starts_with($directory, '.')) {
-            continue;
-        }
+        if (!is_dir($path) || str_starts_with($directory, '.')) { continue; }
 
         $albums[] = $directory;
     }
@@ -169,9 +149,7 @@ function countImagesRecursive(string $albumPath, array $allowedExtensions): int
     $count = count(imageFiles($albumPath, $allowedExtensions));
 
     foreach (scandir($albumPath) ?: [] as $entry) {
-        if ($entry === '.' || $entry === '..' || str_starts_with($entry, '.')) {
-            continue;
-        }
+        if ($entry === '.' || $entry === '..' || str_starts_with($entry, '.')) { continue; }
 
         $path = $albumPath . DIRECTORY_SEPARATOR . $entry;
 
@@ -187,21 +165,15 @@ function normalizeAlbumPath(string $rawPath): ?string
 {
     $rawPath = trim($rawPath, "/\\");
 
-    if ($rawPath === '') {
-        return null;
-    }
+    if ($rawPath === '') { return null; }
 
     $segments = preg_split('#[/\\\\]+#', $rawPath);
     $clean = [];
 
     foreach ($segments as $segment) {
-        if ($segment === '' || $segment === '.' || $segment === '..') {
-            return null;
-        }
+        if ($segment === '' || $segment === '.' || $segment === '..') { return null; }
         $safeSegment = basename($segment);
-        if ($safeSegment !== $segment || str_starts_with($safeSegment, '.')) {
-            return null;
-        }
+        if ($safeSegment !== $segment || str_starts_with($safeSegment, '.')) { return null; }
         $clean[] = $safeSegment;
     }
 
@@ -210,20 +182,14 @@ function normalizeAlbumPath(string $rawPath): ?string
 
 function exifNumber(mixed $value): ?float
 {
-    if ($value === null || $value === '') {
-        return null;
-    }
+    if ($value === null || $value === '') { return null; }
 
-    if (is_numeric($value)) {
-        return (float) $value;
-    }
+    if (is_numeric($value)) { return (float) $value; }
 
     if (is_string($value) && str_contains($value, '/')) {
         [$numerator, $denominator] = array_pad(explode('/', $value, 2), 2, null);
 
-        if (is_numeric($numerator) && is_numeric($denominator) && (float) $denominator != 0) {
-            return (float) $numerator / (float) $denominator;
-        }
+        if (is_numeric($numerator) && is_numeric($denominator) && (float) $denominator != 0) { return (float) $numerator / (float) $denominator; }
     }
 
     return null;
@@ -231,17 +197,13 @@ function exifNumber(mixed $value): ?float
 
 function formatGpsCoordinate(mixed $coordinate, string $hemisphere): ?float
 {
-    if (!is_array($coordinate) || count($coordinate) < 3) {
-        return null;
-    }
+    if (!is_array($coordinate) || count($coordinate) < 3) { return null; }
 
     $degrees = exifNumber($coordinate[0]);
     $minutes = exifNumber($coordinate[1]);
     $seconds = exifNumber($coordinate[2]);
 
-    if ($degrees === null || $minutes === null || $seconds === null) {
-        return null;
-    }
+    if ($degrees === null || $minutes === null || $seconds === null) { return null; }
 
     $decimal = $degrees + ($minutes / 60) + ($seconds / 3600);
 
@@ -256,13 +218,9 @@ function exiftoolAvailable(): bool
 {
     static $available = null;
 
-    if ($available !== null) {
-        return $available;
-    }
+    if ($available !== null) { return $available; }
 
-    if (!function_exists('shell_exec') || stripos((string) ini_get('disable_functions'), 'shell_exec') !== false) {
-        return $available = false;
-    }
+    if (!function_exists('shell_exec') || stripos((string) ini_get('disable_functions'), 'shell_exec') !== false) { return $available = false; }
 
     $result = @shell_exec('command -v exiftool 2>/dev/null');
     return $available = !empty(trim((string) $result));
@@ -273,16 +231,12 @@ function getImageMetadataViaExiftool(string $path): ?array
     $escaped = escapeshellarg($path);
     $json = @shell_exec("timeout 5 exiftool -json -n -GPSLatitude -GPSLongitude -Make -Model -DateTimeOriginal -ISO -FocalLength -FNumber -ExposureTime {$escaped} 2>/dev/null");
 
-    if (!$json) {
-        return null;
-    }
+    if (!$json) { return null; }
 
     $data = json_decode($json, true);
     $row = $data[0] ?? null;
 
-    if (!is_array($row)) {
-        return null;
-    }
+    if (!is_array($row)) { return null; }
 
     $metadata = [
         'camera' => null,
@@ -373,20 +327,14 @@ function getImageMetadata(string $path): array
 
     if (exiftoolAvailable()) {
         $viaExiftool = getImageMetadataViaExiftool($path);
-        if ($viaExiftool !== null) {
-            return array_merge($metadata, $viaExiftool);
-        }
+        if ($viaExiftool !== null) { return array_merge($metadata, $viaExiftool); }
     }
 
-    if (!function_exists('exif_read_data')) {
-        return $metadata;
-    }
+    if (!function_exists('exif_read_data')) { return $metadata; }
 
     $exif = @exif_read_data($path, null, true);
 
-    if (!$exif) {
-        return $metadata;
-    }
+    if (!$exif) { return $metadata; }
 
     $make = trim((string) ($exif['IFD0']['Make'] ?? ''));
     $model = trim((string) ($exif['IFD0']['Model'] ?? ''));
@@ -477,9 +425,7 @@ function humanizeFilename(string $filename): string
 
 function formatBytes(?int $bytes): ?string
 {
-    if ($bytes === null) {
-        return null;
-    }
+    if ($bytes === null) { return null; }
 
     $units = ['B', 'KB', 'MB', 'GB'];
     $i = 0;
@@ -506,9 +452,7 @@ function cleanupOrphanedThumbnails(string $photosDir, array $allowedExtensions):
     );
 
     foreach ($iterator as $fileInfo) {
-        if (!$fileInfo->isFile() || $fileInfo->getExtension() !== 'jpg') {
-            continue;
-        }
+        if (!$fileInfo->isFile() || $fileInfo->getExtension() !== 'jpg') { continue; }
 
         $relativeAlbumDir = substr($fileInfo->getPath(), strlen($thumbsRoot) + 1);
         $albumDir = $relativeAlbumDir === ''
@@ -545,34 +489,24 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
     $albumFsPath = str_replace('/', DIRECTORY_SEPARATOR, $album);
     $srcPath = $photosDir . DIRECTORY_SEPARATOR . $albumFsPath . DIRECTORY_SEPARATOR . $image;
     $cacheDir = $photosDir . DIRECTORY_SEPARATOR . '.thumbs' . DIRECTORY_SEPARATOR . $albumFsPath;
+    $originalUrl = albumFileUrl($photosUrl, $album, $image);
 
     $prefix = $maxDim . '_' . $quality . '_' . md5($image);
     $cacheKey = $prefix . '_' . filemtime($srcPath);
     $cacheFile = $cacheDir . DIRECTORY_SEPARATOR . $cacheKey . '.jpg';
-    $cacheUrl = $photosUrl . '/.thumbs/' . implode('/', array_map('rawurlencode', explode('/', $album))) . '/' . rawurlencode($cacheKey) . '.jpg';
+    $cacheUrl = albumFileUrl($photosUrl, '.thumbs/' . $album, $cacheKey . '.jpg');
 
-    if (is_file($cacheFile)) {
-        return $cacheUrl;
-    }
+    if (is_file($cacheFile)) { return $cacheUrl; }
+    if (!function_exists('imagecreatetruecolor')) { return $originalUrl; }
 
-    if (!function_exists('imagecreatetruecolor')) {
-        return $photosUrl . '/' . implode('/', array_map('rawurlencode', explode('/', $album))) . '/' . rawurlencode($image);
-    }
-
-    if (!is_dir($cacheDir)) {
-        @mkdir($cacheDir, 0755, true);
-    }
+    if (!is_dir($cacheDir)) { @mkdir($cacheDir, 0755, true); }
 
     foreach (glob($cacheDir . DIRECTORY_SEPARATOR . $prefix . '_*.jpg') ?: [] as $staleFile) {
-        if ($staleFile !== $cacheFile) {
-            @unlink($staleFile);
-        }
+        if ($staleFile !== $cacheFile) { @unlink($staleFile); }
     }
 
     $info = @getimagesize($srcPath);
-    if (!$info) {
-        return $photosUrl . '/' . implode('/', array_map('rawurlencode', explode('/', $album))) . '/' . rawurlencode($image);
-    }
+    if (!$info) { return $originalUrl; }
 
     [$srcWidth, $srcHeight, $type] = $info;
 
@@ -584,9 +518,7 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
         default => null,
     };
 
-    if (!$source) {
-        return $photosUrl . '/' . implode('/', array_map('rawurlencode', explode('/', $album))) . '/' . rawurlencode($image);
-    }
+    if (!$source) { return $originalUrl; }
 
     if (function_exists('exif_read_data') && $type === IMAGETYPE_JPEG) {
         $exif = @exif_read_data($srcPath);
@@ -635,9 +567,7 @@ function absoluteUrl(string $siteUrl, string $relative): ?string
 {
     $base = rtrim($siteUrl, '/');
 
-    if ($base === '') {
-        return null;
-    }
+    if ($base === '') { return null; }
 
     return $base . '/' . ltrim($relative, '/');
 }
@@ -723,21 +653,13 @@ if ($album !== null) {
 $imageCount = $album ? count($images) : 0;
 
 $pageTitle = $album ? e($album) . ' - Gallery' : 'Gallery';
-$pageDescription = $album
-    ? 'Browse ' . $imageCount . ' photo' . ($imageCount === 1 ? '' : 's') . ' in the ' . $album . ' album.'
-    : 'A photo gallery.';
+$pageDescription = $album ? 'Browse ' . $imageCount . ' photo' . ($imageCount === 1 ? '' : 's') . ' in the ' . $album . ' album.' : 'A photo gallery.';
 
-$canonicalUrl = absoluteUrl(
-    $config['site_url'],
-    $album ? '?album=' . implode('%2F', array_map('rawurlencode', explode('/', $album))) : ''
-);
+$canonicalUrl = absoluteUrl($config['site_url'], $album ? '?album=' . albumQueryValue($album) : '');
 
 $ogImageUrl = null;
 if ($album && !empty($images[0])) {
-    $ogImageUrl = absoluteUrl(
-        $config['site_url'],
-        $photosUrl . '/' . implode('/', array_map('rawurlencode', explode('/', $album))) . '/' . rawurlencode($images[0])
-    );
+    $ogImageUrl = absoluteUrl($config['site_url'], albumFileUrl($photosUrl, $album, $images[0]));
 }
 
 ?>
@@ -751,26 +673,15 @@ if ($album && !empty($images[0])) {
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%23e5e7eb'%3E%3Cpath d='M10.5 8.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0'/%3E%3Cpath d='M2 4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-1.172a2 2 0 0 1-1.414-.586l-.828-.828A2 2 0 0 0 9.172 2H6.828a2 2 0 0 0-1.414.586l-.828.828A2 2 0 0 1 3.172 4H2zm.5 2a.5.5 0 1 1 0-1 .5.5 0 0 1 0 1z'/%3E%3C/svg%3E">
     <meta name="description" content="<?= e($pageDescription) ?>">
 
-    <?php if ($config['indexing']): ?>
-        <meta name="robots" content="index, follow">
-    <?php else: ?>
-        <meta name="robots" content="noindex, nofollow">
-    <?php endif; ?>
-
-    <?php if ($canonicalUrl): ?>
-        <link rel="canonical" href="<?= e($canonicalUrl) ?>">
-    <?php endif; ?>
+    <?php if ($config['indexing']): ?><meta name="robots" content="index, follow"><?php else: ?><meta name="robots" content="noindex, nofollow"><?php endif; ?>
+    <?php if ($canonicalUrl): ?><link rel="canonical" href="<?= e($canonicalUrl) ?>"><?php endif; ?>
 
     <!-- Open Graph -->
     <meta property="og:type" content="website">
     <meta property="og:title" content="<?= e($album ?: 'Gallery') ?>">
     <meta property="og:description" content="<?= e($pageDescription) ?>">
-    <?php if ($canonicalUrl): ?>
-        <meta property="og:url" content="<?= e($canonicalUrl) ?>">
-    <?php endif; ?>
-    <?php if ($ogImageUrl): ?>
-        <meta property="og:image" content="<?= e($ogImageUrl) ?>">
-    <?php endif; ?>
+    <?php if ($canonicalUrl): ?><meta property="og:url" content="<?= e($canonicalUrl) ?>"><?php endif; ?>
+    <?php if ($ogImageUrl): ?><meta property="og:image" content="<?= e($ogImageUrl) ?>"><?php endif; ?>
 
     <script src="https://cdn.tailwindcss.com"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
@@ -784,9 +695,7 @@ if ($album && !empty($images[0])) {
 
         <header class="mb-8">
             <h1 class="text-3xl font-bold">Gallery</h1>
-            <p class="mt-2 text-gray-400">
-                <?= count($albumList) ?> album<?= count($albumList) === 1 ? '' : 's' ?>
-            </p>
+            <p class="mt-2 text-gray-400"><?= count($albumList) ?> album<?= count($albumList) === 1 ? '' : 's' ?></p>
         </header>
 
         <?php if (!$albumList): ?>
@@ -794,10 +703,7 @@ if ($album && !empty($images[0])) {
             <div class="rounded-xl border border-gray-800 bg-gray-900 p-10 text-center">
                 <div class="text-5xl mb-4">📷</div>
                 <h2 class="text-xl font-semibold">No albums yet</h2>
-                <p class="mt-2 text-gray-400">
-                    Create a folder inside <code class="text-gray-300">photos/</code>
-                    and put some images in it.
-                </p>
+                <p class="mt-2 text-gray-400">Create a folder inside <code class="text-gray-300">photos/</code> and put some images in it.</p>
             </div>
 
         <?php else: ?>
@@ -828,30 +734,16 @@ if ($album && !empty($images[0])) {
 
                     <a href="?album=<?= albumQueryValue($albumName) ?>" class="group block rounded-xl overflow-hidden bg-gray-900 border border-gray-800 hover:border-gray-600 transition">
                         <div class="aspect-square bg-gray-800 overflow-hidden">
-
                             <?php if ($cover): ?>
-
                                 <img src="<?= e(thumbnailUrl($photosUrl, $photosDir, $coverAlbumRelPath, $cover, 400, 70)) ?>" alt="<?= e(humanizeFilename($cover) . ' - ' . $albumName . ' album cover') ?>" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
-
                             <?php else: ?>
-
-                                <div class="w-full h-full flex items-center justify-center text-gray-600">
-                                    <span class="text-5xl">📁</span>
-                                </div>
-
+                                <div class="w-full h-full flex items-center justify-center text-gray-600"><span class="text-5xl">📁</span></div>
                             <?php endif; ?>
-
                         </div>
 
                         <div class="p-4">
-                            <h2 class="font-semibold truncate">
-                                <?= e($albumName) ?>
-                            </h2>
-
-                            <p class="text-sm text-gray-500 mt-1">
-                                <?= $totalCount ?>
-                                photo<?= $totalCount === 1 ? '' : 's' ?>
-                            </p>
+                            <h2 class="font-semibold truncate"><?= e($albumName) ?></h2>
+                            <p class="text-sm text-gray-500 mt-1"><?= $totalCount ?> photo<?= $totalCount === 1 ? '' : 's' ?></p>
                         </div>
                     </a>
 
@@ -873,30 +765,18 @@ if ($album && !empty($images[0])) {
                 : './';
             ?>
 
-            <a href="<?= e($parentHref) ?>" class="inline-flex items-center text-gray-400 hover:text-white mb-6">
-                ← Back to <?= $parentSegments ? e(end($parentSegments)['label']) : 'albums' ?>
-            </a>
+            <a href="<?= e($parentHref) ?>" class="inline-flex items-center text-gray-400 hover:text-white mb-6">← Back to <?= $parentSegments ? e(end($parentSegments)['label']) : 'albums' ?></a>
 
             <nav class="flex flex-wrap items-center gap-1 text-sm text-gray-500 mb-3">
                 <a href="./" class="hover:text-white transition">Gallery</a>
                 <?php foreach ($breadcrumbs as $crumb): ?>
                     <span class="text-gray-700">/</span>
-                    <a href="?album=<?= albumQueryValue($crumb['path']) ?>" class="hover:text-white transition truncate max-w-[160px]">
-                        <?= e($crumb['label']) ?>
-                    </a>
+                    <a href="?album=<?= albumQueryValue($crumb['path']) ?>" class="hover:text-white transition truncate max-w-[160px]"><?= e($crumb['label']) ?></a>
                 <?php endforeach; ?>
             </nav>
 
-            <h1 class="text-3xl font-bold">
-                <?= e($breadcrumbs[array_key_last($breadcrumbs)]['label']) ?>
-            </h1>
-
-            <p class="mt-2 text-gray-400">
-                <?= count($images) ?>
-                photo<?= count($images) === 1 ? '' : 's' ?>
-                <?php if ($subAlbumList): ?>
-                    · <?= count($subAlbumList) ?> sub-album<?= count($subAlbumList) === 1 ? '' : 's' ?>
-                <?php endif; ?>
+            <h1 class="text-3xl font-bold"><?= e($breadcrumbs[array_key_last($breadcrumbs)]['label']) ?></h1>
+            <p class="mt-2 text-gray-400"><?= count($images) ?> photo<?= count($images) === 1 ? '' : 's' ?> <?php if ($subAlbumList): ?> · <?= count($subAlbumList) ?> sub-album<?= count($subAlbumList) === 1 ? '' : 's' ?><?php endif; ?>
             </p>
 
         </header>
@@ -932,28 +812,16 @@ if ($album && !empty($images[0])) {
                         <div class="aspect-square bg-gray-800 overflow-hidden">
 
                             <?php if ($subCover): ?>
-
                                 <img src="<?= e(thumbnailUrl($photosUrl, $photosDir, $subCoverRelPath, $subCover, 400, 70)) ?>" alt="<?= e(humanizeFilename($subCover) . ' - ' . $subName . ' album cover') ?>" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
-
                             <?php else: ?>
-
-                                <div class="w-full h-full flex items-center justify-center text-gray-600">
-                                    <span class="text-5xl">📁</span>
-                                </div>
-
+                                <div class="w-full h-full flex items-center justify-center text-gray-600"><span class="text-5xl">📁</span></div>
                             <?php endif; ?>
 
                         </div>
 
                         <div class="p-4">
-                            <h2 class="font-semibold truncate">
-                                <?= e($subName) ?>
-                            </h2>
-
-                            <p class="text-sm text-gray-500 mt-1">
-                                <?= $subTotalCount ?>
-                                photo<?= $subTotalCount === 1 ? '' : 's' ?>
-                            </p>
+                            <h2 class="font-semibold truncate"><?= e($subName) ?></h2>
+                            <p class="text-sm text-gray-500 mt-1"><?= $subTotalCount ?> photo<?= $subTotalCount === 1 ? '' : 's' ?></p>
                         </div>
                     </a>
 
@@ -983,9 +851,7 @@ if ($album && !empty($images[0])) {
                     $altText = humanizeFilename($image) . ' - ' . $album;
                     ?>
 
-                    <button type="button" @click="open(<?= $index ?>)" class="group aspect-square overflow-hidden rounded-lg bg-gray-900 focus:outline-none focus:ring-2 focus:ring-white">
-                        <img src="<?= e($gridThumbUrl) ?>" alt="<?= e($altText) ?>" title="<?= e($altText) ?>" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
-                    </button>
+                    <button type="button" @click="open(<?= $index ?>)" class="group aspect-square overflow-hidden rounded-lg bg-gray-900 focus:outline-none focus:ring-2 focus:ring-white"><img src="<?= e($gridThumbUrl) ?>" alt="<?= e($altText) ?>" title="<?= e($altText) ?>" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300"></button>
 
                     <?php
                     $imagesAlt[$index] = $altText;
@@ -1001,19 +867,13 @@ if ($album && !empty($images[0])) {
                 <nav class="flex items-center justify-center gap-2 mt-8">
 
                     <?php if ($page > 1): ?>
-                        <a href="?album=<?= albumQueryValue($album) ?>&page=<?= $page - 1 ?>" class="px-3 py-2 rounded-lg bg-gray-900 border border-gray-800 hover:border-gray-600 text-sm transition">
-                            ‹ Prev
-                        </a>
+                        <a href="?album=<?= albumQueryValue($album) ?>&page=<?= $page - 1 ?>" class="px-3 py-2 rounded-lg bg-gray-900 border border-gray-800 hover:border-gray-600 text-sm transition">‹ Prev</a>
                     <?php endif; ?>
 
-                    <span class="px-3 py-2 text-sm text-gray-400">
-                        Page <?= $page ?> of <?= $totalPages ?>
-                    </span>
+                    <span class="px-3 py-2 text-sm text-gray-400">Page <?= $page ?> of <?= $totalPages ?></span>
 
                     <?php if ($page < $totalPages): ?>
-                        <a href="?album=<?= albumQueryValue($album) ?>&page=<?= $page + 1 ?>" class="px-3 py-2 rounded-lg bg-gray-900 border border-gray-800 hover:border-gray-600 text-sm transition">
-                            Next ›
-                        </a>
+                        <a href="?album=<?= albumQueryValue($album) ?>&page=<?= $page + 1 ?>" class="px-3 py-2 rounded-lg bg-gray-900 border border-gray-800 hover:border-gray-600 text-sm transition">Next ›</a>
                     <?php endif; ?>
 
                 </nav>
@@ -1123,21 +983,9 @@ function gallery() {
     return {
         active: null,
         album: <?= json_encode($album ?? '') ?>,
-
-        images: <?= json_encode(
-            array_values($imagesLightbox ?? []),
-            JSON_UNESCAPED_SLASHES
-        ) ?>,
-
-        names: <?= json_encode(
-            $pagedImages ?? [],
-            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
-        ) ?>,
-
-        alts: <?= json_encode(
-            $imagesAlt ?? [],
-            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
-        ) ?>,
+        images: <?= json_encode(array_values($imagesLightbox ?? []), JSON_UNESCAPED_SLASHES) ?>,
+        names: <?= json_encode($pagedImages ?? [], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>,
+        alts: <?= json_encode($imagesAlt ?? [], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>,
 
         metadata: {},
 
@@ -1148,37 +996,24 @@ function gallery() {
 
         openFromHash() {
             const hash = decodeURIComponent(window.location.hash.replace(/^#/, ''));
-            if (!hash) {
-                this.active = null;
-                return;
-            }
+            if (!hash) { this.active = null; return; }
             const index = this.names.indexOf(hash);
-            if (index !== -1) {
-                this.open(index, false);
-            }
+            if (index !== -1) this.open(index, false);
         },
 
         open(index, updateHash = true) {
             this.active = index;
             document.body.classList.add('overflow-hidden');
-            if (updateHash) {
-                history.pushState(null, '', '#' + encodeURIComponent(this.names[index]));
-            }
+            if (updateHash) history.pushState(null, '', '#' + encodeURIComponent(this.names[index]));
             this.fetchMetadata(index);
         },
 
         fetchMetadata(index) {
             const name = this.names[index];
-            if (this.metadata[name]) {
-                return;
-            }
+            if (this.metadata[name]) return;
             fetch('?album=' + encodeURIComponent(this.album) + '&ajax_metadata=' + encodeURIComponent(name))
                 .then(res => res.ok ? res.json() : null)
-                .then(data => {
-                    if (data && !data.error) {
-                        this.metadata[name] = data;
-                    }
-                })
+                .then(data => { if (data && !data.error) this.metadata[name] = data; })
                 .catch(() => {});
         },
 
@@ -1190,27 +1025,20 @@ function gallery() {
 
         previous() {
             if (this.active === null) return;
-
-            this.active =
-                (this.active - 1 + this.images.length) %
-                this.images.length;
+            this.active = (this.active - 1 + this.images.length) % this.images.length;
             history.replaceState(null, '', '#' + encodeURIComponent(this.names[this.active]));
             this.fetchMetadata(this.active);
         },
 
         next() {
             if (this.active === null) return;
-
-            this.active =
-                (this.active + 1) %
-                this.images.length;
+            this.active = (this.active + 1) % this.images.length;
             history.replaceState(null, '', '#' + encodeURIComponent(this.names[this.active]));
             this.fetchMetadata(this.active);
         },
 
         downloadUrl(index) {
-            return '?album=' + encodeURIComponent(this.album) +
-                '&download=' + encodeURIComponent(this.names[index]);
+            return '?album=' + encodeURIComponent(this.album) + '&download=' + encodeURIComponent(this.names[index]);
         }
     }
 }
