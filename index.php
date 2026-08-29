@@ -35,16 +35,10 @@ session_start();
 
 function requireAuth(array $config): void
 {
-    if ($config['password'] === null) {
-        return;
-    }
-
-    if (!empty($_SESSION['gallery_authed'])) {
-        return;
-    }
+    if ($config['password'] === null) { return; }
+    if (!empty($_SESSION['gallery_authed'])) { return; }
 
     $error = null;
-
     $minInterval = 2; // seconds between attempts
     $lastAttempt = $_SESSION['gallery_last_attempt'] ?? 0;
 
@@ -91,80 +85,74 @@ function requireAuth(array $config): void
 
 requireAuth($config);
 
-function e(string $value): string
-{
-    return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
-}
+function e(string $value): string { return htmlspecialchars($value, ENT_QUOTES, 'UTF-8'); }
 
+// Per-request memoization: the same directory gets scanned repeatedly
+// (once for its own listing, again by countImagesRecursive, again by
+// cover-image lookups) — cache scandir results for this request only.
 function imageFiles(string $directory, array $allowedExtensions): array
 {
-    if (!is_dir($directory)) { return []; }
+    static $cache = [];
+    $cacheKey = $directory . '|' . implode(',', $allowedExtensions);
+    if (isset($cache[$cacheKey])) { return $cache[$cacheKey]; }
+
+    if (!is_dir($directory)) { return $cache[$cacheKey] = []; }
 
     $files = [];
-
     foreach (scandir($directory) ?: [] as $file) {
         if ($file === '.' || $file === '..') { continue; }
-
         $path = $directory . DIRECTORY_SEPARATOR . $file;
-
         if (!is_file($path)) { continue; }
-
         $extension = strtolower(pathinfo($file, PATHINFO_EXTENSION));
-
-        if (in_array($extension, $allowedExtensions, true)) {
-            $files[] = $file;
-        }
+        if (in_array($extension, $allowedExtensions, true)) { $files[] = $file; }
     }
 
     natcasesort($files);
-
-    return array_values($files);
+    return $cache[$cacheKey] = array_values($files);
 }
 
 function albums(string $photosDir, string $relativePath = ''): array
 {
+    static $cache = [];
     $basePath = $relativePath !== '' ? $photosDir . DIRECTORY_SEPARATOR . $relativePath : $photosDir;
+    if (isset($cache[$basePath])) { return $cache[$basePath]; }
 
-    if (!is_dir($basePath)) { return []; }
+    if (!is_dir($basePath)) { return $cache[$basePath] = []; }
 
     $albums = [];
-
     foreach (scandir($basePath) ?: [] as $directory) {
         if ($directory === '.' || $directory === '..') { continue; }
-
         $path = $basePath . DIRECTORY_SEPARATOR . $directory;
-
         if (!is_dir($path) || str_starts_with($directory, '.')) { continue; }
-
         $albums[] = $directory;
     }
 
     natcasesort($albums);
-
-    return array_values($albums);
+    return $cache[$basePath] = array_values($albums);
 }
 
+// Memoized recursive count — with 500+ photos across several subfolders
+// this was being recomputed (rescanning every subdirectory) on every
+// single album card in the listing; cache per absolute path per request.
 function countImagesRecursive(string $albumPath, array $allowedExtensions): int
 {
+    static $cache = [];
+    if (isset($cache[$albumPath])) { return $cache[$albumPath]; }
+
     $count = count(imageFiles($albumPath, $allowedExtensions));
 
     foreach (scandir($albumPath) ?: [] as $entry) {
         if ($entry === '.' || $entry === '..' || str_starts_with($entry, '.')) { continue; }
-
         $path = $albumPath . DIRECTORY_SEPARATOR . $entry;
-
-        if (is_dir($path)) {
-            $count += countImagesRecursive($path, $allowedExtensions);
-        }
+        if (is_dir($path)) { $count += countImagesRecursive($path, $allowedExtensions); }
     }
 
-    return $count;
+    return $cache[$albumPath] = $count;
 }
 
 function normalizeAlbumPath(string $rawPath): ?string
 {
     $rawPath = trim($rawPath, "/\\");
-
     if ($rawPath === '') { return null; }
 
     $segments = preg_split('#[/\\\\]+#', $rawPath);
@@ -183,12 +171,10 @@ function normalizeAlbumPath(string $rawPath): ?string
 function exifNumber(mixed $value): ?float
 {
     if ($value === null || $value === '') { return null; }
-
     if (is_numeric($value)) { return (float) $value; }
 
     if (is_string($value) && str_contains($value, '/')) {
         [$numerator, $denominator] = array_pad(explode('/', $value, 2), 2, null);
-
         if (is_numeric($numerator) && is_numeric($denominator) && (float) $denominator != 0) { return (float) $numerator / (float) $denominator; }
     }
 
@@ -202,14 +188,10 @@ function formatGpsCoordinate(mixed $coordinate, string $hemisphere): ?float
     $degrees = exifNumber($coordinate[0]);
     $minutes = exifNumber($coordinate[1]);
     $seconds = exifNumber($coordinate[2]);
-
     if ($degrees === null || $minutes === null || $seconds === null) { return null; }
 
     $decimal = $degrees + ($minutes / 60) + ($seconds / 3600);
-
-    if (in_array(strtoupper($hemisphere), ['S', 'W'], true)) {
-        $decimal *= -1;
-    }
+    if (in_array(strtoupper($hemisphere), ['S', 'W'], true)) { $decimal *= -1; }
 
     return round($decimal, 7);
 }
@@ -217,9 +199,7 @@ function formatGpsCoordinate(mixed $coordinate, string $hemisphere): ?float
 function exiftoolAvailable(): bool
 {
     static $available = null;
-
     if ($available !== null) { return $available; }
-
     if (!function_exists('shell_exec') || stripos((string) ini_get('disable_functions'), 'shell_exec') !== false) { return $available = false; }
 
     $result = @shell_exec('command -v exiftool 2>/dev/null');
@@ -230,34 +210,22 @@ function getImageMetadataViaExiftool(string $path): ?array
 {
     $escaped = escapeshellarg($path);
     $json = @shell_exec("timeout 5 exiftool -json -n -GPSLatitude -GPSLongitude -Make -Model -DateTimeOriginal -ISO -FocalLength -FNumber -ExposureTime {$escaped} 2>/dev/null");
-
     if (!$json) { return null; }
 
     $data = json_decode($json, true);
     $row = $data[0] ?? null;
-
     if (!is_array($row)) { return null; }
 
     $metadata = [
-        'camera' => null,
-        'date' => null,
-        'date_iso' => null,
-        'iso' => $row['ISO'] ?? null,
-        'focal_length' => null,
-        'aperture' => null,
-        'shutter' => null,
-        'latitude' => $row['GPSLatitude'] ?? null,
-        'longitude' => $row['GPSLongitude'] ?? null,
-        'gps_url' => null,
+        'camera' => null, 'date' => null, 'date_iso' => null, 'iso' => $row['ISO'] ?? null,
+        'focal_length' => null, 'aperture' => null, 'shutter' => null,
+        'latitude' => $row['GPSLatitude'] ?? null, 'longitude' => $row['GPSLongitude'] ?? null, 'gps_url' => null,
     ];
 
     $make = trim((string) ($row['Make'] ?? ''));
     $model = trim((string) ($row['Model'] ?? ''));
-    if ($make && $model) {
-        $metadata['camera'] = $make . ' ' . $model;
-    } elseif ($model || $make) {
-        $metadata['camera'] = $model ?: $make;
-    }
+    if ($make && $model) { $metadata['camera'] = $make . ' ' . $model; }
+    elseif ($model || $make) { $metadata['camera'] = $model ?: $make; }
 
     if (!empty($row['DateTimeOriginal'])) {
         $timestamp = strtotime(str_replace(':', '-', substr((string) $row['DateTimeOriginal'], 0, 10)) . substr((string) $row['DateTimeOriginal'], 10));
@@ -267,27 +235,18 @@ function getImageMetadataViaExiftool(string $path): ?array
         }
     }
 
-    if (!empty($row['FocalLength'])) {
-        $metadata['focal_length'] = rtrim(rtrim(number_format((float) $row['FocalLength'], 1), '0'), '.') . ' mm';
-    }
-
-    if (!empty($row['FNumber'])) {
-        $metadata['aperture'] = 'f/' . rtrim(rtrim(number_format((float) $row['FNumber'], 1), '0'), '.');
-    }
+    if (!empty($row['FocalLength'])) { $metadata['focal_length'] = rtrim(rtrim(number_format((float) $row['FocalLength'], 1), '0'), '.') . ' mm'; }
+    if (!empty($row['FNumber'])) { $metadata['aperture'] = 'f/' . rtrim(rtrim(number_format((float) $row['FNumber'], 1), '0'), '.'); }
 
     if (!empty($row['ExposureTime'])) {
         $shutter = (float) $row['ExposureTime'];
-        $metadata['shutter'] = ($shutter > 0 && $shutter < 1)
-            ? '1/' . round(1 / $shutter) . 's'
-            : rtrim(rtrim(number_format($shutter, 2), '0'), '.') . 's';
+        $metadata['shutter'] = ($shutter > 0 && $shutter < 1) ? '1/' . round(1 / $shutter) . 's' : rtrim(rtrim(number_format($shutter, 2), '0'), '.') . 's';
     }
 
     if (is_numeric($metadata['latitude']) && is_numeric($metadata['longitude'])) {
         $metadata['latitude'] = round((float) $metadata['latitude'], 7);
         $metadata['longitude'] = round((float) $metadata['longitude'], 7);
-        $metadata['gps_url'] =
-            'https://www.google.com/maps/search/?api=1&query=' .
-            rawurlencode($metadata['latitude'] . ',' . $metadata['longitude']);
+        $metadata['gps_url'] = 'https://www.google.com/maps/search/?api=1&query=' . rawurlencode($metadata['latitude'] . ',' . $metadata['longitude']);
     } else {
         $metadata['latitude'] = null;
         $metadata['longitude'] = null;
@@ -299,27 +258,14 @@ function getImageMetadataViaExiftool(string $path): ?array
 function getImageMetadata(string $path): array
 {
     $metadata = [
-        'camera' => null,
-        'date' => null,
-        'date_iso' => null,
-        'iso' => null,
-        'focal_length' => null,
-        'aperture' => null,
-        'shutter' => null,
-        'width' => null,
-        'height' => null,
-        'latitude' => null,
-        'longitude' => null,
-        'gps_url' => null,
-        'filesize' => null,
+        'camera' => null, 'date' => null, 'date_iso' => null, 'iso' => null, 'focal_length' => null,
+        'aperture' => null, 'shutter' => null, 'width' => null, 'height' => null,
+        'latitude' => null, 'longitude' => null, 'gps_url' => null, 'filesize' => null,
     ];
 
-    if (is_file($path)) {
-        $metadata['filesize'] = filesize($path) ?: null;
-    }
+    if (is_file($path)) { $metadata['filesize'] = filesize($path) ?: null; }
 
     $imageInfo = @getimagesize($path);
-
     if ($imageInfo) {
         $metadata['width'] = $imageInfo[0] ?? null;
         $metadata['height'] = $imageInfo[1] ?? null;
@@ -333,83 +279,44 @@ function getImageMetadata(string $path): array
     if (!function_exists('exif_read_data')) { return $metadata; }
 
     $exif = @exif_read_data($path, null, true);
-
     if (!$exif) { return $metadata; }
 
     $make = trim((string) ($exif['IFD0']['Make'] ?? ''));
     $model = trim((string) ($exif['IFD0']['Model'] ?? ''));
+    if ($make && $model) { $metadata['camera'] = $make . ' ' . $model; }
+    elseif ($model) { $metadata['camera'] = $model; }
+    elseif ($make) { $metadata['camera'] = $make; }
 
-    if ($make && $model) {
-        $metadata['camera'] = $make . ' ' . $model;
-    } elseif ($model) {
-        $metadata['camera'] = $model;
-    } elseif ($make) {
-        $metadata['camera'] = $make;
-    }
-
-    $date = $exif['EXIF']['DateTimeOriginal']
-        ?? $exif['EXIF']['CreateDate']
-        ?? $exif['IFD0']['DateTime']
-        ?? null;
-
+    $date = $exif['EXIF']['DateTimeOriginal'] ?? $exif['EXIF']['CreateDate'] ?? $exif['IFD0']['DateTime'] ?? null;
     if ($date) {
         $timestamp = strtotime((string) $date);
-
         if ($timestamp !== false) {
             $metadata['date'] = date('F j, Y H:i', $timestamp);
             $metadata['date_iso'] = date('c', $timestamp);
         }
     }
 
-    $metadata['iso'] = $exif['EXIF']['ISOSpeedRatings']
-        ?? $exif['EXIF']['PhotographicSensitivity']
-        ?? null;
+    $metadata['iso'] = $exif['EXIF']['ISOSpeedRatings'] ?? $exif['EXIF']['PhotographicSensitivity'] ?? null;
 
     $focalLength = exifNumber($exif['EXIF']['FocalLength'] ?? null);
+    if ($focalLength !== null) { $metadata['focal_length'] = rtrim(rtrim(number_format($focalLength, 1), '0'), '.') . ' mm'; }
 
-    if ($focalLength !== null) {
-        $metadata['focal_length'] = rtrim(rtrim(number_format($focalLength, 1), '0'), '.') . ' mm';
-    }
-
-    $aperture = exifNumber(
-        $exif['EXIF']['FNumber']
-        ?? $exif['EXIF']['ApertureValue']
-        ?? null
-    );
-
-    if ($aperture !== null) {
-        $metadata['aperture'] = 'f/' . rtrim(rtrim(number_format($aperture, 1), '0'), '.');
-    }
+    $aperture = exifNumber($exif['EXIF']['FNumber'] ?? $exif['EXIF']['ApertureValue'] ?? null);
+    if ($aperture !== null) { $metadata['aperture'] = 'f/' . rtrim(rtrim(number_format($aperture, 1), '0'), '.'); }
 
     $shutter = exifNumber($exif['EXIF']['ExposureTime'] ?? null);
-
     if ($shutter !== null) {
-        if ($shutter > 0 && $shutter < 1) {
-            $metadata['shutter'] = '1/' . round(1 / $shutter) . 's';
-        } else {
-            $metadata['shutter'] = rtrim(rtrim(number_format($shutter, 2), '0'), '.') . 's';
-        }
+        $metadata['shutter'] = ($shutter > 0 && $shutter < 1) ? '1/' . round(1 / $shutter) . 's' : rtrim(rtrim(number_format($shutter, 2), '0'), '.') . 's';
     }
 
     $gps = $exif['GPS'] ?? [];
-
-    $latitude = formatGpsCoordinate(
-        $gps['GPSLatitude'] ?? null,
-        (string) ($gps['GPSLatitudeRef'] ?? '')
-    );
-
-    $longitude = formatGpsCoordinate(
-        $gps['GPSLongitude'] ?? null,
-        (string) ($gps['GPSLongitudeRef'] ?? '')
-    );
+    $latitude = formatGpsCoordinate($gps['GPSLatitude'] ?? null, (string) ($gps['GPSLatitudeRef'] ?? ''));
+    $longitude = formatGpsCoordinate($gps['GPSLongitude'] ?? null, (string) ($gps['GPSLongitudeRef'] ?? ''));
 
     if ($latitude !== null && $longitude !== null) {
         $metadata['latitude'] = $latitude;
         $metadata['longitude'] = $longitude;
-
-        $metadata['gps_url'] =
-            'https://www.google.com/maps/search/?api=1&query=' .
-            rawurlencode($latitude . ',' . $longitude);
+        $metadata['gps_url'] = 'https://www.google.com/maps/search/?api=1&query=' . rawurlencode($latitude . ',' . $longitude);
     }
 
     return $metadata;
@@ -430,11 +337,7 @@ function formatBytes(?int $bytes): ?string
     $units = ['B', 'KB', 'MB', 'GB'];
     $i = 0;
     $value = $bytes;
-
-    while ($value >= 1024 && $i < count($units) - 1) {
-        $value /= 1024;
-        $i++;
-    }
+    while ($value >= 1024 && $i < count($units) - 1) { $value /= 1024; $i++; }
 
     return rtrim(rtrim(number_format($value, 1), '0'), '.') . ' ' . $units[$i];
 }
@@ -442,48 +345,33 @@ function formatBytes(?int $bytes): ?string
 function cleanupOrphanedThumbnails(string $photosDir, array $allowedExtensions): void
 {
     $thumbsRoot = $photosDir . DIRECTORY_SEPARATOR . '.thumbs';
+    if (!is_dir($thumbsRoot)) { return; }
 
-    if (!is_dir($thumbsRoot)) {
-        return;
-    }
-
-    $iterator = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator($thumbsRoot, FilesystemIterator::SKIP_DOTS)
-    );
+    $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($thumbsRoot, FilesystemIterator::SKIP_DOTS));
 
     foreach ($iterator as $fileInfo) {
         if (!$fileInfo->isFile() || $fileInfo->getExtension() !== 'jpg') { continue; }
 
         $relativeAlbumDir = substr($fileInfo->getPath(), strlen($thumbsRoot) + 1);
-        $albumDir = $relativeAlbumDir === ''
-            ? $photosDir
-            : $photosDir . DIRECTORY_SEPARATOR . $relativeAlbumDir;
+        $albumDir = $relativeAlbumDir === '' ? $photosDir : $photosDir . DIRECTORY_SEPARATOR . $relativeAlbumDir;
 
-        if (!is_dir($albumDir)) {
-            @unlink($fileInfo->getPathname());
-            continue;
-        }
-
-        if (!preg_match('/^\d+_\d+_([a-f0-9]{32})_\d+\.jpg$/', $fileInfo->getFilename(), $m)) {
-            continue;
-        }
+        if (!is_dir($albumDir)) { @unlink($fileInfo->getPathname()); continue; }
+        if (!preg_match('/^\d+_\d+_([a-f0-9]{32})_\d+\.jpg$/', $fileInfo->getFilename(), $m)) { continue; }
 
         $imageHash = $m[1];
         $stillExists = false;
-
         foreach (imageFiles($albumDir, $allowedExtensions) as $existingImage) {
-            if (md5($existingImage) === $imageHash) {
-                $stillExists = true;
-                break;
-            }
+            if (md5($existingImage) === $imageHash) { $stillExists = true; break; }
         }
 
-        if (!$stillExists) {
-            @unlink($fileInfo->getPathname());
-        }
+        if (!$stillExists) { @unlink($fileInfo->getPathname()); }
     }
 }
 
+// Generates (and disk-caches) a resized/compressed JPEG copy of a photo.
+// Only ever called for the grid thumbnail up front; the larger lightbox
+// version is generated lazily via the AJAX metadata endpoint, only for
+// the photo actually opened — see the ajax_metadata handler below.
 function thumbnailUrl(string $photosUrl, string $photosDir, string $album, string $image, int $maxDim, int $quality): string
 {
     $albumFsPath = str_replace('/', DIRECTORY_SEPARATOR, $album);
@@ -498,7 +386,6 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
 
     if (is_file($cacheFile)) { return $cacheUrl; }
     if (!function_exists('imagecreatetruecolor')) { return $originalUrl; }
-
     if (!is_dir($cacheDir)) { @mkdir($cacheDir, 0755, true); }
 
     foreach (glob($cacheDir . DIRECTORY_SEPARATOR . $prefix . '_*.jpg') ?: [] as $staleFile) {
@@ -523,17 +410,13 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
     if (function_exists('exif_read_data') && $type === IMAGETYPE_JPEG) {
         $exif = @exif_read_data($srcPath);
         $orientation = $exif['Orientation'] ?? 1;
-
         $source = match ($orientation) {
             3 => imagerotate($source, 180, 0),
             6 => imagerotate($source, -90, 0),
             8 => imagerotate($source, 90, 0),
             default => $source,
         };
-
-        if (in_array($orientation, [6, 8], true)) {
-            [$srcWidth, $srcHeight] = [$srcHeight, $srcWidth];
-        }
+        if (in_array($orientation, [6, 8], true)) { [$srcWidth, $srcHeight] = [$srcHeight, $srcWidth]; }
     }
 
     $ratio = min($maxDim / $srcWidth, $maxDim / $srcHeight, 1);
@@ -543,7 +426,6 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
     $dest = imagecreatetruecolor($dstWidth, $dstHeight);
     imagefill($dest, 0, 0, imagecolorallocate($dest, 17, 24, 39)); // gray-900 bg for transparent PNGs
     imagecopyresampled($dest, $source, 0, 0, 0, 0, $dstWidth, $dstHeight, $srcWidth, $srcHeight);
-
     imagejpeg($dest, $cacheFile, $quality);
 
     imagedestroy($source);
@@ -552,10 +434,7 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
     return $cacheUrl;
 }
 
-function albumQueryValue(string $albumPath): string
-{
-    return implode('%2F', array_map('rawurlencode', explode('/', $albumPath)));
-}
+function albumQueryValue(string $albumPath): string { return implode('%2F', array_map('rawurlencode', explode('/', $albumPath))); }
 
 function albumFileUrl(string $photosUrl, string $albumPath, string $file = ''): string
 {
@@ -566,9 +445,7 @@ function albumFileUrl(string $photosUrl, string $albumPath, string $file = ''): 
 function absoluteUrl(string $siteUrl, string $relative): ?string
 {
     $base = rtrim($siteUrl, '/');
-
     if ($base === '') { return null; }
-
     return $base . '/' . ltrim($relative, '/');
 }
 
@@ -576,18 +453,10 @@ $album = $_GET['album'] ?? null;
 
 if ($album !== null) {
     $album = normalizeAlbumPath((string) $album);
-
-    if ($album === null) {
-        http_response_code(404);
-        die('Album not found.');
-    }
+    if ($album === null) { http_response_code(404); die('Album not found.'); }
 
     $albumPath = $photosDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $album);
-
-    if (!is_dir($albumPath)) {
-        http_response_code(404);
-        die('Album not found.');
-    }
+    if (!is_dir($albumPath)) { http_response_code(404); die('Album not found.'); }
 
     $images = imageFiles($albumPath, $allowedExtensions);
     $subAlbumList = albums($photosDir, str_replace('/', DIRECTORY_SEPARATOR, $album));
@@ -596,22 +465,14 @@ if ($album !== null) {
     $accumulated = [];
     foreach (explode('/', $album) as $segment) {
         $accumulated[] = $segment;
-        $breadcrumbs[] = [
-            'label' => $segment,
-            'path' => implode('/', $accumulated),
-        ];
+        $breadcrumbs[] = ['label' => $segment, 'path' => implode('/', $accumulated)];
     }
 
     if (isset($_GET['download'])) {
         $requestedFile = basename((string) $_GET['download']);
-
-        if (!in_array($requestedFile, $images, true)) {
-            http_response_code(404);
-            die('File not found.');
-        }
+        if (!in_array($requestedFile, $images, true)) { http_response_code(404); die('File not found.'); }
 
         $filePath = $albumPath . DIRECTORY_SEPARATOR . $requestedFile;
-
         header('Content-Type: application/octet-stream');
         header('Content-Disposition: attachment; filename="' . $requestedFile . '"');
         header('Content-Length: ' . filesize($filePath));
@@ -620,9 +481,12 @@ if ($album !== null) {
         exit;
     }
 
+    // AJAX metadata endpoint: called only for the photo actually opened
+    // in the lightbox. Also generates (and returns) the larger lightbox
+    // thumbnail lazily here, instead of pre-generating it for every photo
+    // in the album up front — this is what makes big albums load fast.
     if (isset($_GET['ajax_metadata'])) {
         $requestedFile = basename((string) $_GET['ajax_metadata']);
-
         header('Content-Type: application/json');
 
         if (!in_array($requestedFile, $images, true)) {
@@ -633,6 +497,7 @@ if ($album !== null) {
 
         $metadata = getImageMetadata($albumPath . DIRECTORY_SEPARATOR . $requestedFile);
         $metadata['filesize'] = formatBytes($metadata['filesize'] ?? null);
+        $metadata['lightbox_url'] = thumbnailUrl($photosUrl, $photosDir, $album, $requestedFile, 1600, 80);
         echo json_encode($metadata);
         exit;
     }
@@ -644,23 +509,16 @@ if ($album !== null) {
     $pagedImages = array_values(array_slice($images, ($page - 1) * $perPage, $perPage));
 } else {
     $albumList = albums($photosDir);
-
-    if (mt_rand(1, 50) === 1) {
-        cleanupOrphanedThumbnails($photosDir, $allowedExtensions);
-    }
+    if (mt_rand(1, 50) === 1) { cleanupOrphanedThumbnails($photosDir, $allowedExtensions); }
 }
 
 $imageCount = $album ? count($images) : 0;
-
 $pageTitle = $album ? e($album) . ' - Gallery' : 'Gallery';
 $pageDescription = $album ? 'Browse ' . $imageCount . ' photo' . ($imageCount === 1 ? '' : 's') . ' in the ' . $album . ' album.' : 'A photo gallery.';
-
 $canonicalUrl = absoluteUrl($config['site_url'], $album ? '?album=' . albumQueryValue($album) : '');
 
 $ogImageUrl = null;
-if ($album && !empty($images[0])) {
-    $ogImageUrl = absoluteUrl($config['site_url'], albumFileUrl($photosUrl, $album, $images[0]));
-}
+if ($album && !empty($images[0])) { $ogImageUrl = absoluteUrl($config['site_url'], albumFileUrl($photosUrl, $album, $images[0])); }
 
 ?>
 <!DOCTYPE html>
@@ -760,9 +618,7 @@ if ($album && !empty($images[0])) {
             <?php
             $parentSegments = $breadcrumbs;
             array_pop($parentSegments);
-            $parentHref = $parentSegments
-                ? '?album=' . albumQueryValue(end($parentSegments)['path'])
-                : './';
+            $parentHref = $parentSegments ? '?album=' . albumQueryValue(end($parentSegments)['path']) : './';
             ?>
 
             <a href="<?= e($parentHref) ?>" class="inline-flex items-center text-gray-400 hover:text-white mb-6">← Back to <?= $parentSegments ? e(end($parentSegments)['label']) : 'albums' ?></a>
@@ -845,9 +701,11 @@ if ($album && !empty($images[0])) {
                 <?php foreach ($pagedImages as $index => $image): ?>
 
                     <?php
+                    // Only the grid thumbnail is generated eagerly here.
+                    // The larger lightbox version is generated on demand
+                    // via ajax_metadata when a photo is actually opened —
+                    // this is what keeps large albums fast to load.
                     $gridThumbUrl = thumbnailUrl($photosUrl, $photosDir, $album, $image, 300, 65);
-                    $lightboxUrl = thumbnailUrl($photosUrl, $photosDir, $album, $image, 1600, 80);
-
                     $altText = humanizeFilename($image) . ' - ' . $album;
                     ?>
 
@@ -855,7 +713,7 @@ if ($album && !empty($images[0])) {
 
                     <?php
                     $imagesAlt[$index] = $altText;
-                    $imagesLightbox[$index] = $lightboxUrl;
+                    $imagesGrid[$index] = $gridThumbUrl;
                     ?>
 
                 <?php endforeach; ?>
@@ -983,7 +841,10 @@ function gallery() {
     return {
         active: null,
         album: <?= json_encode($album ?? '') ?>,
-        images: <?= json_encode(array_values($imagesLightbox ?? []), JSON_UNESCAPED_SLASHES) ?>,
+        // Starts as the small grid thumbnails so the lightbox opens
+        // instantly; fetchMetadata() swaps in the full-size lightbox
+        // image once it's ready (generated on demand server-side).
+        images: <?= json_encode(array_values($imagesGrid ?? []), JSON_UNESCAPED_SLASHES) ?>,
         names: <?= json_encode($pagedImages ?? [], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>,
         alts: <?= json_encode($imagesAlt ?? [], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>,
 
@@ -1013,7 +874,12 @@ function gallery() {
             if (this.metadata[name]) return;
             fetch('?album=' + encodeURIComponent(this.album) + '&ajax_metadata=' + encodeURIComponent(name))
                 .then(res => res.ok ? res.json() : null)
-                .then(data => { if (data && !data.error) this.metadata[name] = data; })
+                .then(data => {
+                    if (data && !data.error) {
+                        this.metadata[name] = data;
+                        if (data.lightbox_url) this.images[index] = data.lightbox_url;
+                    }
+                })
                 .catch(() => {});
         },
 
