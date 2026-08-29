@@ -13,13 +13,42 @@ $config = [
 
     // Used for canonical URLs / Open Graph — leave blank to skip
     'site_url' => '',
+
+    // How many photos to show per page inside an album.
+    'photos_per_page' => 100,
+
+    // true = show PHP errors on screen (local development only).
+    // false = hide errors from visitors, still logged server-side.
+    'debug' => false,
 ];
+
+// ---------------------------------------------------------------
+// Error handling — never leak paths/stack traces to visitors.
+// ---------------------------------------------------------------
+error_reporting(E_ALL);
+ini_set('display_errors', $config['debug'] ? '1' : '0');
+ini_set('log_errors', '1');
+
+// ---------------------------------------------------------------
+// Security headers
+// ---------------------------------------------------------------
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: SAMEORIGIN');
+header('Referrer-Policy: strict-origin-when-cross-origin');
 
 $photosDir = __DIR__ . '/photos';
 $photosUrl = 'photos';
 
 $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'];
 
+// Harden session cookie (HttpOnly, SameSite, Secure over HTTPS) before starting.
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path' => '/',
+    'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off',
+    'httponly' => true,
+    'samesite' => 'Lax',
+]);
 session_start();
 
 function requireAuth(array $config): void
@@ -34,16 +63,27 @@ function requireAuth(array $config): void
 
     $error = null;
 
+    // Simple brute-force throttle: after a wrong attempt, force a short
+    // delay before the next one is accepted. Session-based, not perfect
+    // against distributed attacks, but stops naive rapid guessing.
+    $minInterval = 2; // seconds between attempts
+    $lastAttempt = $_SESSION['gallery_last_attempt'] ?? 0;
+
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['gallery_password'])) {
-        if (password_verify($_POST['gallery_password'], $config['password'])) {
+        if ((microtime(true) - $lastAttempt) < $minInterval) {
+            $error = 'Too many attempts. Please wait a moment and try again.';
+        } elseif (password_verify($_POST['gallery_password'], $config['password'])) {
+            session_regenerate_id(true);
             $_SESSION['gallery_authed'] = true;
+            unset($_SESSION['gallery_last_attempt']);
             // Redirect to drop the POST and preserve any ?album= query.
             $qs = $_SERVER['QUERY_STRING'] ?? '';
             header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . ($qs ? '?' . $qs : ''));
             exit;
+        } else {
+            $_SESSION['gallery_last_attempt'] = microtime(true);
+            $error = 'Incorrect password.';
         }
-
-        $error = 'Incorrect password.';
     }
 
     ?>
@@ -54,6 +94,7 @@ function requireAuth(array $config): void
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <meta name="robots" content="noindex, nofollow">
         <title>Password required</title>
+        <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%23e5e7eb'%3E%3Cpath d='M10.5 8.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0'/%3E%3Cpath d='M2 4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-1.172a2 2 0 0 1-1.414-.586l-.828-.828A2 2 0 0 0 9.172 2H6.828a2 2 0 0 0-1.414.586l-.828.828A2 2 0 0 1 3.172 4H2zm.5 2a.5.5 0 1 1 0-1 .5.5 0 0 1 0 1z'/%3E%3C/svg%3E">
         <script src="https://cdn.tailwindcss.com"></script>
     </head>
     <body class="min-h-screen bg-gray-950 text-white flex items-center justify-center p-4">
@@ -264,7 +305,7 @@ function exiftoolAvailable(): bool
 function getImageMetadataViaExiftool(string $path): ?array
 {
     $escaped = escapeshellarg($path);
-    $json = @shell_exec("exiftool -json -n -GPSLatitude -GPSLongitude -Make -Model -DateTimeOriginal -ISO -FocalLength -FNumber -ExposureTime {$escaped} 2>/dev/null");
+    $json = @shell_exec("timeout 5 exiftool -json -n -GPSLatitude -GPSLongitude -Make -Model -DateTimeOriginal -ISO -FocalLength -FNumber -ExposureTime {$escaped} 2>/dev/null");
 
     if (!$json) {
         return null;
@@ -499,12 +540,71 @@ function formatBytes(?int $bytes): ?string
 // Thumbnails: resized + compressed copies, cached to disk on first
 // request. Needs the GD extension (bundled with PHP by default).
 // ---------------------------------------------------------------
+// Removes cached thumbnail files whose source photo no longer exists
+// anywhere in that album folder (e.g. the photo was deleted). Walks
+// the .thumbs tree, which mirrors the photos/ folder structure.
+function cleanupOrphanedThumbnails(string $photosDir, array $allowedExtensions): void
+{
+    $thumbsRoot = $photosDir . DIRECTORY_SEPARATOR . '.thumbs';
+
+    if (!is_dir($thumbsRoot)) {
+        return;
+    }
+
+    $iterator = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($thumbsRoot, FilesystemIterator::SKIP_DOTS)
+    );
+
+    foreach ($iterator as $fileInfo) {
+        if (!$fileInfo->isFile() || $fileInfo->getExtension() !== 'jpg') {
+            continue;
+        }
+
+        // Thumbnail dir mirrors the album path; the real photos live one
+        // level up (outside .thumbs) at the same relative album path.
+        $relativeAlbumDir = substr($fileInfo->getPath(), strlen($thumbsRoot) + 1);
+        $albumDir = $relativeAlbumDir === ''
+            ? $photosDir
+            : $photosDir . DIRECTORY_SEPARATOR . $relativeAlbumDir;
+
+        if (!is_dir($albumDir)) {
+            @unlink($fileInfo->getPathname());
+            continue;
+        }
+
+        // Cache filename is "{maxDim}_{quality}_{md5(imagename)}_{mtime}.jpg".
+        // Check whether any current image in that album hashes to this prefix.
+        if (!preg_match('/^\d+_\d+_([a-f0-9]{32})_\d+\.jpg$/', $fileInfo->getFilename(), $m)) {
+            continue;
+        }
+
+        $imageHash = $m[1];
+        $stillExists = false;
+
+        foreach (imageFiles($albumDir, $allowedExtensions) as $existingImage) {
+            if (md5($existingImage) === $imageHash) {
+                $stillExists = true;
+                break;
+            }
+        }
+
+        if (!$stillExists) {
+            @unlink($fileInfo->getPathname());
+        }
+    }
+}
+
 function thumbnailUrl(string $photosUrl, string $photosDir, string $album, string $image, int $maxDim, int $quality): string
 {
     $albumFsPath = str_replace('/', DIRECTORY_SEPARATOR, $album);
     $srcPath = $photosDir . DIRECTORY_SEPARATOR . $albumFsPath . DIRECTORY_SEPARATOR . $image;
     $cacheDir = $photosDir . DIRECTORY_SEPARATOR . '.thumbs' . DIRECTORY_SEPARATOR . $albumFsPath;
-    $cacheKey = $maxDim . '_' . $quality . '_' . md5($image . filemtime($srcPath));
+
+    // Stable prefix (independent of mtime) lets us find and delete old
+    // cached versions of this exact image/size/quality when the source
+    // file changes, instead of leaving them to accumulate forever.
+    $prefix = $maxDim . '_' . $quality . '_' . md5($image);
+    $cacheKey = $prefix . '_' . filemtime($srcPath);
     $cacheFile = $cacheDir . DIRECTORY_SEPARATOR . $cacheKey . '.jpg';
     $cacheUrl = $photosUrl . '/.thumbs/' . implode('/', array_map('rawurlencode', explode('/', $album))) . '/' . rawurlencode($cacheKey) . '.jpg';
 
@@ -519,6 +619,14 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
 
     if (!is_dir($cacheDir)) {
         @mkdir($cacheDir, 0755, true);
+    }
+
+    // Remove any stale cached copies of this image at this size/quality
+    // (e.g. from before the source file was replaced/edited).
+    foreach (glob($cacheDir . DIRECTORY_SEPARATOR . $prefix . '_*.jpg') ?: [] as $staleFile) {
+        if ($staleFile !== $cacheFile) {
+            @unlink($staleFile);
+        }
     }
 
     $info = @getimagesize($srcPath);
@@ -649,8 +757,46 @@ if ($album !== null) {
         readfile($filePath);
         exit;
     }
+
+    // ---------------------------------------------------------------
+    // AJAX metadata endpoint: ?album=X&ajax_metadata=filename.jpg
+    // Metadata (EXIF/GPS) is only fetched for the photo actually
+    // opened in the lightbox, not for every photo in the grid — this
+    // avoids spawning an exiftool process per photo on every page load.
+    // ---------------------------------------------------------------
+    if (isset($_GET['ajax_metadata'])) {
+        $requestedFile = basename((string) $_GET['ajax_metadata']);
+
+        header('Content-Type: application/json');
+
+        if (!in_array($requestedFile, $images, true)) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Not found']);
+            exit;
+        }
+
+        $metadata = getImageMetadata($albumPath . DIRECTORY_SEPARATOR . $requestedFile);
+        $metadata['filesize'] = formatBytes($metadata['filesize'] ?? null);
+        echo json_encode($metadata);
+        exit;
+    }
+
+    // ---------------------------------------------------------------
+    // Pagination
+    // ---------------------------------------------------------------
+    $perPage = max(1, (int) $config['photos_per_page']);
+    $totalImages = count($images);
+    $totalPages = max(1, (int) ceil($totalImages / $perPage));
+    $page = max(1, min($totalPages, (int) ($_GET['page'] ?? 1)));
+    $pagedImages = array_values(array_slice($images, ($page - 1) * $perPage, $perPage));
 } else {
     $albumList = albums($photosDir);
+
+    // Opportunistic cleanup: only runs occasionally (not on every
+    // request) since it walks the whole .thumbs tree.
+    if (mt_rand(1, 50) === 1) {
+        cleanupOrphanedThumbnails($photosDir, $allowedExtensions);
+    }
 }
 
 // ---------------------------------------------------------------
@@ -684,6 +830,7 @@ if ($album && !empty($images[0])) {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
     <title><?= $pageTitle ?></title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%23e5e7eb'%3E%3Cpath d='M10.5 8.5a2.5 2.5 0 1 1-5 0 2.5 2.5 0 0 1 5 0'/%3E%3Cpath d='M2 4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-1.172a2 2 0 0 1-1.414-.586l-.828-.828A2 2 0 0 0 9.172 2H6.828a2 2 0 0 0-1.414.586l-.828.828A2 2 0 0 1 3.172 4H2zm.5 2a.5.5 0 1 1 0-1 .5.5 0 0 1 0 1z'/%3E%3C/svg%3E">
     <meta name="description" content="<?= e($pageDescription) ?>">
 
     <?php if ($config['indexing']): ?>
@@ -937,15 +1084,11 @@ if ($album && !empty($images[0])) {
 
             <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
 
-                <?php foreach ($images as $index => $image): ?>
+                <?php foreach ($pagedImages as $index => $image): ?>
 
                     <?php
                     $gridThumbUrl = thumbnailUrl($photosUrl, $photosDir, $album, $image, 300, 65);
                     $lightboxUrl = thumbnailUrl($photosUrl, $photosDir, $album, $image, 1600, 80);
-
-                    $metadata = getImageMetadata(
-                        $albumPath . DIRECTORY_SEPARATOR . $image
-                    );
 
                     $altText = humanizeFilename($image) . ' - ' . $album;
                     ?>
@@ -965,7 +1108,6 @@ if ($album && !empty($images[0])) {
                     </button>
 
                     <?php
-                    $imagesMetadata[$index] = $metadata;
                     $imagesAlt[$index] = $altText;
                     $imagesLightbox[$index] = $lightboxUrl;
                     ?>
@@ -973,6 +1115,36 @@ if ($album && !empty($images[0])) {
                 <?php endforeach; ?>
 
             </div>
+
+            <?php if ($totalPages > 1): ?>
+
+                <nav class="flex items-center justify-center gap-2 mt-8">
+
+                    <?php if ($page > 1): ?>
+                        <a
+                            href="?album=<?= albumQueryValue($album) ?>&page=<?= $page - 1 ?>"
+                            class="px-3 py-2 rounded-lg bg-gray-900 border border-gray-800 hover:border-gray-600 text-sm transition"
+                        >
+                            ‹ Prev
+                        </a>
+                    <?php endif; ?>
+
+                    <span class="px-3 py-2 text-sm text-gray-400">
+                        Page <?= $page ?> of <?= $totalPages ?>
+                    </span>
+
+                    <?php if ($page < $totalPages): ?>
+                        <a
+                            href="?album=<?= albumQueryValue($album) ?>&page=<?= $page + 1 ?>"
+                            class="px-3 py-2 rounded-lg bg-gray-900 border border-gray-800 hover:border-gray-600 text-sm transition"
+                        >
+                            Next ›
+                        </a>
+                    <?php endif; ?>
+
+                </nav>
+
+            <?php endif; ?>
 
             <!-- Lightbox -->
 
@@ -1042,8 +1214,8 @@ if ($album && !empty($images[0])) {
                             <div class="min-w-0">
                                 <h2 class="font-medium text-sm break-words" x-text="names[active]"></h2>
                                 <p
-                                    x-show="metadata[active]?.date"
-                                    x-text="metadata[active]?.date"
+                                    x-show="metadata[names[active]]?.date"
+                                    x-text="metadata[names[active]]?.date"
                                     class="text-xs text-gray-500 mt-1"
                                 ></p>
                             </div>
@@ -1056,44 +1228,44 @@ if ($album && !empty($images[0])) {
 
                         <dl class="px-5 py-4 space-y-3 text-sm">
 
-                            <div x-show="metadata[active]?.camera" class="flex justify-between gap-4">
+                            <div x-show="metadata[names[active]]?.camera" class="flex justify-between gap-4">
                                 <dt class="text-gray-500">Camera</dt>
-                                <dd class="text-gray-300 text-right" x-text="metadata[active]?.camera"></dd>
+                                <dd class="text-gray-300 text-right" x-text="metadata[names[active]]?.camera"></dd>
                             </div>
 
-                            <div x-show="metadata[active]?.focal_length" class="flex justify-between gap-4">
+                            <div x-show="metadata[names[active]]?.focal_length" class="flex justify-between gap-4">
                                 <dt class="text-gray-500">Focal length</dt>
-                                <dd class="text-gray-300 text-right" x-text="metadata[active]?.focal_length"></dd>
+                                <dd class="text-gray-300 text-right" x-text="metadata[names[active]]?.focal_length"></dd>
                             </div>
 
-                            <div x-show="metadata[active]?.aperture" class="flex justify-between gap-4">
+                            <div x-show="metadata[names[active]]?.aperture" class="flex justify-between gap-4">
                                 <dt class="text-gray-500">Aperture</dt>
-                                <dd class="text-gray-300 text-right" x-text="metadata[active]?.aperture"></dd>
+                                <dd class="text-gray-300 text-right" x-text="metadata[names[active]]?.aperture"></dd>
                             </div>
 
-                            <div x-show="metadata[active]?.shutter" class="flex justify-between gap-4">
+                            <div x-show="metadata[names[active]]?.shutter" class="flex justify-between gap-4">
                                 <dt class="text-gray-500">Shutter</dt>
-                                <dd class="text-gray-300 text-right" x-text="metadata[active]?.shutter"></dd>
+                                <dd class="text-gray-300 text-right" x-text="metadata[names[active]]?.shutter"></dd>
                             </div>
 
-                            <div x-show="metadata[active]?.iso" class="flex justify-between gap-4">
+                            <div x-show="metadata[names[active]]?.iso" class="flex justify-between gap-4">
                                 <dt class="text-gray-500">ISO</dt>
-                                <dd class="text-gray-300 text-right" x-text="metadata[active]?.iso"></dd>
+                                <dd class="text-gray-300 text-right" x-text="metadata[names[active]]?.iso"></dd>
                             </div>
 
-                            <div x-show="metadata[active]?.width && metadata[active]?.height" class="flex justify-between gap-4">
+                            <div x-show="metadata[names[active]]?.width && metadata[names[active]]?.height" class="flex justify-between gap-4">
                                 <dt class="text-gray-500">Dimensions</dt>
-                                <dd class="text-gray-300 text-right" x-text="metadata[active]?.width + ' × ' + metadata[active]?.height"></dd>
+                                <dd class="text-gray-300 text-right" x-text="metadata[names[active]]?.width + ' × ' + metadata[names[active]]?.height"></dd>
                             </div>
 
-                            <div x-show="metadata[active]?.filesize" class="flex justify-between gap-4">
+                            <div x-show="metadata[names[active]]?.filesize" class="flex justify-between gap-4">
                                 <dt class="text-gray-500">File size</dt>
-                                <dd class="text-gray-300 text-right" x-text="metadata[active]?.filesize"></dd>
+                                <dd class="text-gray-300 text-right" x-text="metadata[names[active]]?.filesize"></dd>
                             </div>
 
-                            <div x-show="metadata[active]?.latitude !== null" class="flex justify-between gap-4">
+                            <div x-show="metadata[names[active]]?.latitude != null" class="flex justify-between gap-4">
                                 <dt class="text-gray-500">Location</dt>
-                                <dd class="text-gray-300 text-right" x-text="metadata[active]?.latitude + ', ' + metadata[active]?.longitude"></dd>
+                                <dd class="text-gray-300 text-right" x-text="metadata[names[active]]?.latitude + ', ' + metadata[names[active]]?.longitude"></dd>
                             </div>
 
                         </dl>
@@ -1101,8 +1273,8 @@ if ($album && !empty($images[0])) {
                         <div class="mt-auto px-5 py-4 border-t border-gray-800 flex flex-col gap-2">
 
                             <a
-                                x-show="metadata[active]?.gps_url"
-                                :href="metadata[active]?.gps_url"
+                                x-show="metadata[names[active]]?.gps_url"
+                                :href="metadata[names[active]]?.gps_url"
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 class="flex items-center justify-center gap-2 text-sm font-medium text-gray-200 bg-gray-800 hover:bg-gray-700 rounded-lg px-4 py-2 transition"
@@ -1146,7 +1318,7 @@ function gallery() {
         ) ?>,
 
         names: <?= json_encode(
-            $images ?? [],
+            $pagedImages ?? [],
             JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
         ) ?>,
 
@@ -1155,13 +1327,10 @@ function gallery() {
             JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
         ) ?>,
 
-        metadata: <?= json_encode(
-            array_map(
-                fn($m) => array_merge($m, ['filesize' => formatBytes($m['filesize'] ?? null)]),
-                $imagesMetadata ?? []
-            ),
-            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
-        ) ?>,
+        // Metadata (EXIF/GPS) is fetched on demand per photo — see
+        // fetchMetadata() — rather than computed for the whole grid
+        // up front, since it can require running exiftool per photo.
+        metadata: {},
 
         init() {
             this.openFromHash();
@@ -1186,6 +1355,22 @@ function gallery() {
             if (updateHash) {
                 history.pushState(null, '', '#' + encodeURIComponent(this.names[index]));
             }
+            this.fetchMetadata(index);
+        },
+
+        fetchMetadata(index) {
+            const name = this.names[index];
+            if (this.metadata[name]) {
+                return;
+            }
+            fetch('?album=' + encodeURIComponent(this.album) + '&ajax_metadata=' + encodeURIComponent(name))
+                .then(res => res.ok ? res.json() : null)
+                .then(data => {
+                    if (data && !data.error) {
+                        this.metadata[name] = data;
+                    }
+                })
+                .catch(() => {});
         },
 
         close() {
@@ -1201,6 +1386,7 @@ function gallery() {
                 (this.active - 1 + this.images.length) %
                 this.images.length;
             history.replaceState(null, '', '#' + encodeURIComponent(this.names[this.active]));
+            this.fetchMetadata(this.active);
         },
 
         next() {
@@ -1210,6 +1396,7 @@ function gallery() {
                 (this.active + 1) %
                 this.images.length;
             history.replaceState(null, '', '#' + encodeURIComponent(this.names[this.active]));
+            this.fetchMetadata(this.active);
         },
 
         downloadUrl(index) {
