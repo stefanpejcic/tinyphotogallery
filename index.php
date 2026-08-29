@@ -1,8 +1,10 @@
 <?php
+/*
+ * tinyphotogallery ~ Tiny Photo Gallery
+ * @author Stefan Pejcic
+ * @github https://github.com/stefanpejcic/tinyphotogallery
+ */
 
-// ---------------------------------------------------------------
-// tinyphotogallery — by Stefan Pejcic
-// https://github.com/stefanpejcic/tinyphotogallery/
 $config = [
     'indexing' => false,
     'password' => null,
