@@ -375,12 +375,52 @@ function cleanupOrphanedThumbnails(string $photosDir, array $allowedExtensions):
 
 // Generates (and disk-caches) a resized/compressed JPEG copy of a photo.
 // Cache path mirrors the original: .thumbs/{maxDim}_{quality}/{album}/{filename}
+// Fixed size presets — keeps the on-demand generation endpoint from
+// accepting arbitrary dimensions (which would let anyone force GD work
+// at any size/quality just by crafting a URL).
+function thumbnailSizeParams(string $size): ?array
+{
+    return match ($size) {
+        'grid' => [300, 65],
+        'cover' => [400, 70],
+        'lightbox' => [1600, 80],
+        default => null,
+    };
+}
+
+// Returns a URL for this photo's thumbnail WITHOUT generating it if it
+// isn't cached yet. If cached, returns the static file URL directly
+// (fast — just a filesystem check). If not cached, returns a URL to
+// the on-demand generation endpoint instead. Combined with the <img
+// loading="lazy"> attribute, this means the browser only requests (and
+// therefore only triggers generation for) images that actually scroll
+// into view — instead of every photo in the album being generated
+// synchronously on every page load, which is what made large albums
+// slow to open.
+function thumbnailSrc(string $photosUrl, string $photosDir, string $album, string $image, string $size): string
+{
+    [$maxDim, $quality] = thumbnailSizeParams($size);
+    $albumFsPath = str_replace('/', DIRECTORY_SEPARATOR, $album);
+    $srcPath = $photosDir . DIRECTORY_SEPARATOR . $albumFsPath . DIRECTORY_SEPARATOR . $image;
+    $cacheDir = $photosDir . DIRECTORY_SEPARATOR . '.thumbs' . DIRECTORY_SEPARATOR . $maxDim . '_' . $quality . DIRECTORY_SEPARATOR . $albumFsPath;
+    $cacheFile = $cacheDir . DIRECTORY_SEPARATOR . $image;
+
+    if (is_file($cacheFile) && filesize($cacheFile) > 0 && filemtime($cacheFile) >= @filemtime($srcPath)) {
+        return albumFileUrl($photosUrl, '.thumbs/' . $maxDim . '_' . $quality . '/' . $album, $image);
+    }
+
+    return '?album=' . albumQueryValue($album) . '&thumb=' . rawurlencode($image) . '&size=' . $size;
+}
+
+// Generates (and disk-caches) a resized/compressed JPEG copy of a photo.
+// This always generates immediately — used by the on-demand thumb
+// endpoint (when the browser actually requests an uncached image) and
+// by the ajax_metadata endpoint (for the lightbox-size image, generated
+// the moment a photo is opened).
+// Cache path mirrors the original: .thumbs/{maxDim}_{quality}/{album}/{filename}
 // — same filename as the source (not a hash), which keeps URL structure
 // consistent with the working photos/ path and avoids server/proxy
 // path-encoding quirks some hosts hit on hashed filenames.
-// Only the grid thumbnail is generated eagerly on page load; the larger
-// lightbox version is generated lazily via the ajax_metadata endpoint,
-// only for the photo actually opened.
 function thumbnailUrl(string $photosUrl, string $photosDir, string $album, string $image, int $maxDim, int $quality): string
 {
     $albumFsPath = str_replace('/', DIRECTORY_SEPARATOR, $album);
@@ -493,7 +533,33 @@ if ($album !== null) {
         header('Content-Disposition: attachment; filename="' . $requestedFile . '"');
         header('Content-Length: ' . filesize($filePath));
         header('X-Robots-Tag: noindex');
+        header('Cache-Control: no-store, no-cache, must-revalidate');
         readfile($filePath);
+        exit;
+    }
+
+    // On-demand thumbnail generation: ?album=X&thumb=filename&size=grid|cover|lightbox
+    // Only hit when a browser actually requests an image whose thumbnail
+    // isn't cached yet (see thumbnailSrc()) — combined with <img
+    // loading="lazy">, this means only visible/scrolled-to photos ever
+    // trigger GD work, instead of the whole album generating up front.
+    // Generates the thumbnail then redirects to the resulting static
+    // file, so the browser caches the real file normally afterward.
+    if (isset($_GET['thumb'], $_GET['size'])) {
+        $requestedFile = basename((string) $_GET['thumb']);
+        $sizeParams = thumbnailSizeParams((string) $_GET['size']);
+
+        header('Cache-Control: no-store, no-cache, must-revalidate');
+
+        if (!$sizeParams || !in_array($requestedFile, $images, true)) {
+            http_response_code(404);
+            exit;
+        }
+
+        [$maxDim, $quality] = $sizeParams;
+        $generatedUrl = thumbnailUrl($photosUrl, $photosDir, $album, $requestedFile, $maxDim, $quality);
+        header('Location: /' . ltrim($generatedUrl, '/'));
+        http_response_code(302);
         exit;
     }
 
@@ -504,8 +570,7 @@ if ($album !== null) {
     if (isset($_GET['ajax_metadata'])) {
         $requestedFile = basename((string) $_GET['ajax_metadata']);
         header('Content-Type: application/json');
-        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-        header('X-LiteSpeed-Cache-Control: no-cache');
+        header('Cache-Control: no-store, no-cache, must-revalidate');
 
         if (!in_array($requestedFile, $images, true)) {
             http_response_code(404);
@@ -611,7 +676,7 @@ if ($album && !empty($images[0])) { $ogImageUrl = absoluteUrl($config['site_url'
                     <a href="?album=<?= albumQueryValue($albumName) ?>" class="group block rounded-xl overflow-hidden bg-gray-900 border border-gray-800 hover:border-gray-600 transition">
                         <div class="aspect-square bg-gray-800 overflow-hidden">
                             <?php if ($cover): ?>
-                                <img src="<?= e(thumbnailUrl($photosUrl, $photosDir, $coverAlbumRelPath, $cover, 400, 70)) ?>" alt="<?= e(humanizeFilename($cover) . ' - ' . $albumName . ' album cover') ?>" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
+                                <img src="<?= e(thumbnailSrc($photosUrl, $photosDir, $coverAlbumRelPath, $cover, 'cover')) ?>" alt="<?= e(humanizeFilename($cover) . ' - ' . $albumName . ' album cover') ?>" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
                             <?php else: ?>
                                 <div class="w-full h-full flex items-center justify-center text-gray-600"><span class="text-5xl">📁</span></div>
                             <?php endif; ?>
@@ -686,7 +751,7 @@ if ($album && !empty($images[0])) { $ogImageUrl = absoluteUrl($config['site_url'
                         <div class="aspect-square bg-gray-800 overflow-hidden">
 
                             <?php if ($subCover): ?>
-                                <img src="<?= e(thumbnailUrl($photosUrl, $photosDir, $subCoverRelPath, $subCover, 400, 70)) ?>" alt="<?= e(humanizeFilename($subCover) . ' - ' . $subName . ' album cover') ?>" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
+                                <img src="<?= e(thumbnailSrc($photosUrl, $photosDir, $subCoverRelPath, $subCover, 'cover')) ?>" alt="<?= e(humanizeFilename($subCover) . ' - ' . $subName . ' album cover') ?>" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
                             <?php else: ?>
                                 <div class="w-full h-full flex items-center justify-center text-gray-600"><span class="text-5xl">📁</span></div>
                             <?php endif; ?>
@@ -723,7 +788,7 @@ if ($album && !empty($images[0])) { $ogImageUrl = absoluteUrl($config['site_url'
                     // The larger lightbox version is generated on demand
                     // via ajax_metadata when a photo is actually opened —
                     // this is what keeps large albums fast to load.
-                    $gridThumbUrl = thumbnailUrl($photosUrl, $photosDir, $album, $image, 300, 65);
+                    $gridThumbUrl = thumbnailSrc($photosUrl, $photosDir, $album, $image, 'grid');
                     $altText = humanizeFilename($image) . ' - ' . $album;
                     ?>
 
@@ -867,6 +932,7 @@ function gallery() {
         alts: <?= json_encode($imagesAlt ?? [], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?>,
 
         metadata: {},
+        _pending: {},
 
         init() {
             this.openFromHash();
@@ -884,13 +950,19 @@ function gallery() {
             this.active = index;
             document.body.classList.add('overflow-hidden');
             if (updateHash) history.pushState(null, '', '#' + encodeURIComponent(this.names[index]));
-            this.fetchMetadata(index);
+            this.fetchMetadata(index).then(() => this.preloadNeighbors(index));
         },
 
+        // Fetches metadata + the full-size lightbox image for a photo.
+        // Returns a promise so callers can chain work (like preloading)
+        // once it's done. Safe to call repeatedly — already-fetched or
+        // in-flight requests are reused instead of duplicated.
         fetchMetadata(index) {
             const name = this.names[index];
-            if (this.metadata[name]) return;
-            fetch('?album=' + encodeURIComponent(this.album) + '&ajax_metadata=' + encodeURIComponent(name))
+            if (this.metadata[name]) return Promise.resolve();
+            if (this._pending[name]) return this._pending[name];
+
+            const promise = fetch('?album=' + encodeURIComponent(this.album) + '&ajax_metadata=' + encodeURIComponent(name))
                 .then(res => res.ok ? res.json() : null)
                 .then(data => {
                     if (data && !data.error) {
@@ -898,7 +970,24 @@ function gallery() {
                         if (data.lightbox_url) this.images[index] = data.lightbox_url;
                     }
                 })
-                .catch(() => {});
+                .catch(() => {})
+                .finally(() => { delete this._pending[name]; });
+
+            this._pending[name] = promise;
+            return promise;
+        },
+
+        // Quietly fetches metadata (and generates the lightbox thumbnail)
+        // for the photo before and after the given index, so pressing
+        // next/previous usually finds the image already ready instead
+        // of waiting on a fresh fetch. Runs in the background — doesn't
+        // block or change what's currently shown.
+        preloadNeighbors(index) {
+            if (this.images.length < 2) return;
+            const nextIndex = (index + 1) % this.images.length;
+            const prevIndex = (index - 1 + this.images.length) % this.images.length;
+            this.fetchMetadata(nextIndex);
+            this.fetchMetadata(prevIndex);
         },
 
         close() {
@@ -911,14 +1000,14 @@ function gallery() {
             if (this.active === null) return;
             this.active = (this.active - 1 + this.images.length) % this.images.length;
             history.replaceState(null, '', '#' + encodeURIComponent(this.names[this.active]));
-            this.fetchMetadata(this.active);
+            this.fetchMetadata(this.active).then(() => this.preloadNeighbors(this.active));
         },
 
         next() {
             if (this.active === null) return;
             this.active = (this.active + 1) % this.images.length;
             history.replaceState(null, '', '#' + encodeURIComponent(this.names[this.active]));
-            this.fetchMetadata(this.active);
+            this.fetchMetadata(this.active).then(() => this.preloadNeighbors(this.active));
         },
 
         downloadUrl(index) {
