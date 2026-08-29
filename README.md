@@ -10,7 +10,7 @@ A photo gallery in a single PHP file. No database, no build step, no dependencie
 <tr>
 <td width="50%">
 
-### Galeries
+### Albums
 
 <img width="953" height="1047" alt="slika" src="https://github.com/user-attachments/assets/f04335f2-b4a1-41ce-8f15-c6060fb90aab" />
 
