@@ -5,6 +5,30 @@ A photo gallery in a single PHP file. No database, no build step, no dependencie
 ![PHP](https://img.shields.io/badge/PHP-8.1%2B-777bb4)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
+
+<table>
+<tr>
+<td width="50%">
+
+### Galeries
+
+<img width="953" height="1047" alt="slika" src="https://github.com/user-attachments/assets/f04335f2-b4a1-41ce-8f15-c6060fb90aab" />
+
+</td>
+<td width="50%">
+    
+### Single photo
+
+<img width="953" height="1047" alt="slika" src="https://github.com/user-attachments/assets/7bf0431d-d005-4963-847d-281b4352fcf9" />
+
+</td>
+</tr>
+</table>
+
+
+
+
+
 ## Features
 
 - **Zero setup**: one file, no composer, no database. Just PHP + GD.
