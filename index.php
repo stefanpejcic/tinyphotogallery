@@ -1,37 +1,24 @@
 <?php
 
 // ---------------------------------------------------------------
-// Config — edit these directly, no separate file needed.
-// ---------------------------------------------------------------
+// tinyphotogallery — by Stefan Pejcic
+// https://github.com/stefanpejcic/tinyphotogallery/
 $config = [
-    // Search engine indexing on/off
     'indexing' => false,
 
-    // Set to null to disable password protection.
-    // Generate a hash with: php -r "echo password_hash('yourpassword', PASSWORD_DEFAULT);"
     'password' => null,
 
-    // Used for canonical URLs / Open Graph — leave blank to skip
     'site_url' => '',
 
-    // How many photos to show per page inside an album.
     'photos_per_page' => 100,
 
-    // true = show PHP errors on screen (local development only).
-    // false = hide errors from visitors, still logged server-side.
     'debug' => false,
 ];
 
-// ---------------------------------------------------------------
-// Error handling — never leak paths/stack traces to visitors.
-// ---------------------------------------------------------------
 error_reporting(E_ALL);
 ini_set('display_errors', $config['debug'] ? '1' : '0');
 ini_set('log_errors', '1');
 
-// ---------------------------------------------------------------
-// Security headers
-// ---------------------------------------------------------------
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: SAMEORIGIN');
 header('Referrer-Policy: strict-origin-when-cross-origin');
@@ -41,7 +28,6 @@ $photosUrl = 'photos';
 
 $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif'];
 
-// Harden session cookie (HttpOnly, SameSite, Secure over HTTPS) before starting.
 session_set_cookie_params([
     'lifetime' => 0,
     'path' => '/',
@@ -63,9 +49,6 @@ function requireAuth(array $config): void
 
     $error = null;
 
-    // Simple brute-force throttle: after a wrong attempt, force a short
-    // delay before the next one is accepted. Session-based, not perfect
-    // against distributed attacks, but stops naive rapid guessing.
     $minInterval = 2; // seconds between attempts
     $lastAttempt = $_SESSION['gallery_last_attempt'] ?? 0;
 
@@ -76,7 +59,6 @@ function requireAuth(array $config): void
             session_regenerate_id(true);
             $_SESSION['gallery_authed'] = true;
             unset($_SESSION['gallery_last_attempt']);
-            // Redirect to drop the POST and preserve any ?album= query.
             $qs = $_SERVER['QUERY_STRING'] ?? '';
             header('Location: ' . strtok($_SERVER['REQUEST_URI'], '?') . ($qs ? '?' . $qs : ''));
             exit;
@@ -104,16 +86,8 @@ function requireAuth(array $config): void
             <?php if ($error !== null): ?>
                 <p class="text-sm text-red-400 mb-3"><?= htmlspecialchars($error, ENT_QUOTES, 'UTF-8') ?></p>
             <?php endif; ?>
-            <input
-                type="password"
-                name="gallery_password"
-                autofocus
-                class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-white mb-4 focus:outline-none focus:ring-2 focus:ring-white"
-                placeholder="Password"
-            >
-            <button type="submit" class="w-full rounded-lg bg-white text-gray-950 font-medium py-2 hover:bg-gray-200 transition">
-                Enter
-            </button>
+            <input type="password" name="gallery_password" autofocus class="w-full rounded-lg bg-gray-800 border border-gray-700 px-3 py-2 text-white mb-4 focus:outline-none focus:ring-2 focus:ring-white" placeholder="Password">
+            <button type="submit" class="w-full rounded-lg bg-white text-gray-950 font-medium py-2 hover:bg-gray-200 transition">Enter</button>
         </form>
     </body>
     </html>
@@ -190,7 +164,6 @@ function albums(string $photosDir, string $relativePath = ''): array
     return array_values($albums);
 }
 
-// Recursively count images within an album folder and all its subfolders.
 function countImagesRecursive(string $albumPath, array $allowedExtensions): int
 {
     $count = count(imageFiles($albumPath, $allowedExtensions));
@@ -210,9 +183,6 @@ function countImagesRecursive(string $albumPath, array $allowedExtensions): int
     return $count;
 }
 
-// Validate and normalize a user-supplied album path (from ?album=).
-// Prevents directory traversal while allowing nested segments like
-// "Wedding2026/Ceremony". Returns null if the path is invalid.
 function normalizeAlbumPath(string $rawPath): ?string
 {
     $rawPath = trim($rawPath, "/\\");
@@ -228,7 +198,6 @@ function normalizeAlbumPath(string $rawPath): ?string
         if ($segment === '' || $segment === '.' || $segment === '..') {
             return null;
         }
-        // basename() strips any residual separators/traversal per segment.
         $safeSegment = basename($segment);
         if ($safeSegment !== $segment || str_starts_with($safeSegment, '.')) {
             return null;
@@ -283,9 +252,6 @@ function formatGpsCoordinate(mixed $coordinate, string $hemisphere): ?float
     return round($decimal, 7);
 }
 
-// Checks once per request whether the `exiftool` binary is callable.
-// exiftool reads GPS/camera metadata without needing the PHP `exif`
-// extension, and also handles PNG/WebP/HEIC (exif_read_data does not).
 function exiftoolAvailable(): bool
 {
     static $available = null;
@@ -405,8 +371,6 @@ function getImageMetadata(string $path): array
         $metadata['height'] = $imageInfo[1] ?? null;
     }
 
-    // Prefer exiftool when available — no PHP extension needed, and it
-    // covers formats (PNG, WebP, HEIC) exif_read_data() cannot read.
     if (exiftoolAvailable()) {
         $viaExiftool = getImageMetadataViaExiftool($path);
         if ($viaExiftool !== null) {
@@ -418,8 +382,6 @@ function getImageMetadata(string $path): array
         return $metadata;
     }
 
-    // EXIF is generally available for JPEG/TIFF images. Suppress warnings
-    // for formats/files where EXIF is not supported.
     $exif = @exif_read_data($path, null, true);
 
     if (!$exif) {
@@ -481,7 +443,6 @@ function getImageMetadata(string $path): array
         }
     }
 
-    // GPS coordinates are stored as DMS arrays in EXIF.
     $gps = $exif['GPS'] ?? [];
 
     $latitude = formatGpsCoordinate(
@@ -498,8 +459,6 @@ function getImageMetadata(string $path): array
         $metadata['latitude'] = $latitude;
         $metadata['longitude'] = $longitude;
 
-        // Google Maps link. Coordinates are kept numeric and generated
-        // server-side rather than accepting arbitrary URLs from EXIF.
         $metadata['gps_url'] =
             'https://www.google.com/maps/search/?api=1&query=' .
             rawurlencode($latitude . ',' . $longitude);
@@ -508,8 +467,6 @@ function getImageMetadata(string $path): array
     return $metadata;
 }
 
-// Build a human-friendly alt/title string from a filename, e.g.
-// "sunset-over-lake_2.jpg" -> "Sunset over lake 2"
 function humanizeFilename(string $filename): string
 {
     $name = pathinfo($filename, PATHINFO_FILENAME);
@@ -536,13 +493,6 @@ function formatBytes(?int $bytes): ?string
     return rtrim(rtrim(number_format($value, 1), '0'), '.') . ' ' . $units[$i];
 }
 
-// ---------------------------------------------------------------
-// Thumbnails: resized + compressed copies, cached to disk on first
-// request. Needs the GD extension (bundled with PHP by default).
-// ---------------------------------------------------------------
-// Removes cached thumbnail files whose source photo no longer exists
-// anywhere in that album folder (e.g. the photo was deleted). Walks
-// the .thumbs tree, which mirrors the photos/ folder structure.
 function cleanupOrphanedThumbnails(string $photosDir, array $allowedExtensions): void
 {
     $thumbsRoot = $photosDir . DIRECTORY_SEPARATOR . '.thumbs';
@@ -560,8 +510,6 @@ function cleanupOrphanedThumbnails(string $photosDir, array $allowedExtensions):
             continue;
         }
 
-        // Thumbnail dir mirrors the album path; the real photos live one
-        // level up (outside .thumbs) at the same relative album path.
         $relativeAlbumDir = substr($fileInfo->getPath(), strlen($thumbsRoot) + 1);
         $albumDir = $relativeAlbumDir === ''
             ? $photosDir
@@ -572,8 +520,6 @@ function cleanupOrphanedThumbnails(string $photosDir, array $allowedExtensions):
             continue;
         }
 
-        // Cache filename is "{maxDim}_{quality}_{md5(imagename)}_{mtime}.jpg".
-        // Check whether any current image in that album hashes to this prefix.
         if (!preg_match('/^\d+_\d+_([a-f0-9]{32})_\d+\.jpg$/', $fileInfo->getFilename(), $m)) {
             continue;
         }
@@ -600,9 +546,6 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
     $srcPath = $photosDir . DIRECTORY_SEPARATOR . $albumFsPath . DIRECTORY_SEPARATOR . $image;
     $cacheDir = $photosDir . DIRECTORY_SEPARATOR . '.thumbs' . DIRECTORY_SEPARATOR . $albumFsPath;
 
-    // Stable prefix (independent of mtime) lets us find and delete old
-    // cached versions of this exact image/size/quality when the source
-    // file changes, instead of leaving them to accumulate forever.
     $prefix = $maxDim . '_' . $quality . '_' . md5($image);
     $cacheKey = $prefix . '_' . filemtime($srcPath);
     $cacheFile = $cacheDir . DIRECTORY_SEPARATOR . $cacheKey . '.jpg';
@@ -613,7 +556,6 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
     }
 
     if (!function_exists('imagecreatetruecolor')) {
-        // GD not installed — fall back to the original file.
         return $photosUrl . '/' . implode('/', array_map('rawurlencode', explode('/', $album))) . '/' . rawurlencode($image);
     }
 
@@ -621,8 +563,6 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
         @mkdir($cacheDir, 0755, true);
     }
 
-    // Remove any stale cached copies of this image at this size/quality
-    // (e.g. from before the source file was replaced/edited).
     foreach (glob($cacheDir . DIRECTORY_SEPARATOR . $prefix . '_*.jpg') ?: [] as $staleFile) {
         if ($staleFile !== $cacheFile) {
             @unlink($staleFile);
@@ -648,7 +588,6 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
         return $photosUrl . '/' . implode('/', array_map('rawurlencode', explode('/', $album))) . '/' . rawurlencode($image);
     }
 
-    // Correct orientation using EXIF if available, so thumbnails aren't sideways.
     if (function_exists('exif_read_data') && $type === IMAGETYPE_JPEG) {
         $exif = @exif_read_data($srcPath);
         $orientation = $exif['Orientation'] ?? 1;
@@ -681,20 +620,17 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
     return $cacheUrl;
 }
 
-// Build a safe ?album= query value for a nested album path.
 function albumQueryValue(string $albumPath): string
 {
     return implode('%2F', array_map('rawurlencode', explode('/', $albumPath)));
 }
 
-// Build a safe photos/ URL for a nested album path.
 function albumFileUrl(string $photosUrl, string $albumPath, string $file = ''): string
 {
     $url = $photosUrl . '/' . implode('/', array_map('rawurlencode', explode('/', $albumPath)));
     return $file !== '' ? $url . '/' . rawurlencode($file) : $url;
 }
 
-// Build an absolute URL from site_url + a relative path.
 function absoluteUrl(string $siteUrl, string $relative): ?string
 {
     $base = rtrim($siteUrl, '/');
@@ -726,7 +662,6 @@ if ($album !== null) {
     $images = imageFiles($albumPath, $allowedExtensions);
     $subAlbumList = albums($photosDir, str_replace('/', DIRECTORY_SEPARATOR, $album));
 
-    // Breadcrumb trail: each entry is [label, path-to-that-level]
     $breadcrumbs = [];
     $accumulated = [];
     foreach (explode('/', $album) as $segment) {
@@ -737,9 +672,6 @@ if ($album !== null) {
         ];
     }
 
-    // ---------------------------------------------------------------
-    // Direct download endpoint: ?album=X&download=filename.jpg
-    // ---------------------------------------------------------------
     if (isset($_GET['download'])) {
         $requestedFile = basename((string) $_GET['download']);
 
@@ -758,12 +690,6 @@ if ($album !== null) {
         exit;
     }
 
-    // ---------------------------------------------------------------
-    // AJAX metadata endpoint: ?album=X&ajax_metadata=filename.jpg
-    // Metadata (EXIF/GPS) is only fetched for the photo actually
-    // opened in the lightbox, not for every photo in the grid — this
-    // avoids spawning an exiftool process per photo on every page load.
-    // ---------------------------------------------------------------
     if (isset($_GET['ajax_metadata'])) {
         $requestedFile = basename((string) $_GET['ajax_metadata']);
 
@@ -781,9 +707,6 @@ if ($album !== null) {
         exit;
     }
 
-    // ---------------------------------------------------------------
-    // Pagination
-    // ---------------------------------------------------------------
     $perPage = max(1, (int) $config['photos_per_page']);
     $totalImages = count($images);
     $totalPages = max(1, (int) ceil($totalImages / $perPage));
@@ -792,16 +715,11 @@ if ($album !== null) {
 } else {
     $albumList = albums($photosDir);
 
-    // Opportunistic cleanup: only runs occasionally (not on every
-    // request) since it walks the whole .thumbs tree.
     if (mt_rand(1, 50) === 1) {
         cleanupOrphanedThumbnails($photosDir, $allowedExtensions);
     }
 }
 
-// ---------------------------------------------------------------
-// SEO: per-image title/description/alt + noindex toggle
-// ---------------------------------------------------------------
 $imageCount = $album ? count($images) : 0;
 
 $pageTitle = $album ? e($album) . ' - Gallery' : 'Gallery';
@@ -860,11 +778,7 @@ if ($album && !empty($images[0])) {
 
 <body class="min-h-screen bg-gray-950 text-white">
 
-<div
-    x-data="gallery()"
-    x-init="init()"
-    class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8"
->
+<div x-data="gallery()" x-init="init()" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 
     <?php if ($album === null): ?>
 
@@ -898,8 +812,6 @@ if ($album && !empty($images[0])) {
                     $cover = $albumImages[0] ?? null;
                     $coverAlbumRelPath = $albumName;
 
-                    // If this album folder has no images directly inside it,
-                    // look one level into its subfolders for a cover photo.
                     if (!$cover) {
                         foreach (albums($photosDir, $albumName) as $subName) {
                             $subImages = imageFiles($albumFsPath . DIRECTORY_SEPARATOR . $subName, $allowedExtensions);
@@ -914,20 +826,12 @@ if ($album && !empty($images[0])) {
                     $totalCount = countImagesRecursive($albumFsPath, $allowedExtensions);
                     ?>
 
-                    <a
-                        href="?album=<?= albumQueryValue($albumName) ?>"
-                        class="group block rounded-xl overflow-hidden bg-gray-900 border border-gray-800 hover:border-gray-600 transition"
-                    >
+                    <a href="?album=<?= albumQueryValue($albumName) ?>" class="group block rounded-xl overflow-hidden bg-gray-900 border border-gray-800 hover:border-gray-600 transition">
                         <div class="aspect-square bg-gray-800 overflow-hidden">
 
                             <?php if ($cover): ?>
 
-                                <img
-                                    src="<?= e(thumbnailUrl($photosUrl, $photosDir, $coverAlbumRelPath, $cover, 400, 70)) ?>"
-                                    alt="<?= e(humanizeFilename($cover) . ' - ' . $albumName . ' album cover') ?>"
-                                    loading="lazy"
-                                    class="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-                                >
+                                <img src="<?= e(thumbnailUrl($photosUrl, $photosDir, $coverAlbumRelPath, $cover, 400, 70)) ?>" alt="<?= e(humanizeFilename($cover) . ' - ' . $albumName . ' album cover') ?>" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
 
                             <?php else: ?>
 
@@ -969,10 +873,7 @@ if ($album && !empty($images[0])) {
                 : './';
             ?>
 
-            <a
-                href="<?= e($parentHref) ?>"
-                class="inline-flex items-center text-gray-400 hover:text-white mb-6"
-            >
+            <a href="<?= e($parentHref) ?>" class="inline-flex items-center text-gray-400 hover:text-white mb-6">
                 ← Back to <?= $parentSegments ? e(end($parentSegments)['label']) : 'albums' ?>
             </a>
 
@@ -980,10 +881,7 @@ if ($album && !empty($images[0])) {
                 <a href="./" class="hover:text-white transition">Gallery</a>
                 <?php foreach ($breadcrumbs as $crumb): ?>
                     <span class="text-gray-700">/</span>
-                    <a
-                        href="?album=<?= albumQueryValue($crumb['path']) ?>"
-                        class="hover:text-white transition truncate max-w-[160px]"
-                    >
+                    <a href="?album=<?= albumQueryValue($crumb['path']) ?>" class="hover:text-white transition truncate max-w-[160px]">
                         <?= e($crumb['label']) ?>
                     </a>
                 <?php endforeach; ?>
@@ -1030,20 +928,12 @@ if ($album && !empty($images[0])) {
                     $subTotalCount = countImagesRecursive($subFsPath, $allowedExtensions);
                     ?>
 
-                    <a
-                        href="?album=<?= albumQueryValue($subRelPath) ?>"
-                        class="group block rounded-xl overflow-hidden bg-gray-900 border border-gray-800 hover:border-gray-600 transition"
-                    >
+                    <a href="?album=<?= albumQueryValue($subRelPath) ?>" class="group block rounded-xl overflow-hidden bg-gray-900 border border-gray-800 hover:border-gray-600 transition">
                         <div class="aspect-square bg-gray-800 overflow-hidden">
 
                             <?php if ($subCover): ?>
 
-                                <img
-                                    src="<?= e(thumbnailUrl($photosUrl, $photosDir, $subCoverRelPath, $subCover, 400, 70)) ?>"
-                                    alt="<?= e(humanizeFilename($subCover) . ' - ' . $subName . ' album cover') ?>"
-                                    loading="lazy"
-                                    class="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-                                >
+                                <img src="<?= e(thumbnailUrl($photosUrl, $photosDir, $subCoverRelPath, $subCover, 400, 70)) ?>" alt="<?= e(humanizeFilename($subCover) . ' - ' . $subName . ' album cover') ?>" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
 
                             <?php else: ?>
 
@@ -1093,18 +983,8 @@ if ($album && !empty($images[0])) {
                     $altText = humanizeFilename($image) . ' - ' . $album;
                     ?>
 
-                    <button
-                        type="button"
-                        @click="open(<?= $index ?>)"
-                        class="group aspect-square overflow-hidden rounded-lg bg-gray-900 focus:outline-none focus:ring-2 focus:ring-white"
-                    >
-                        <img
-                            src="<?= e($gridThumbUrl) ?>"
-                            alt="<?= e($altText) ?>"
-                            title="<?= e($altText) ?>"
-                            loading="lazy"
-                            class="w-full h-full object-cover group-hover:scale-105 transition duration-300"
-                        >
+                    <button type="button" @click="open(<?= $index ?>)" class="group aspect-square overflow-hidden rounded-lg bg-gray-900 focus:outline-none focus:ring-2 focus:ring-white">
+                        <img src="<?= e($gridThumbUrl) ?>" alt="<?= e($altText) ?>" title="<?= e($altText) ?>" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition duration-300">
                     </button>
 
                     <?php
@@ -1121,10 +1001,7 @@ if ($album && !empty($images[0])) {
                 <nav class="flex items-center justify-center gap-2 mt-8">
 
                     <?php if ($page > 1): ?>
-                        <a
-                            href="?album=<?= albumQueryValue($album) ?>&page=<?= $page - 1 ?>"
-                            class="px-3 py-2 rounded-lg bg-gray-900 border border-gray-800 hover:border-gray-600 text-sm transition"
-                        >
+                        <a href="?album=<?= albumQueryValue($album) ?>&page=<?= $page - 1 ?>" class="px-3 py-2 rounded-lg bg-gray-900 border border-gray-800 hover:border-gray-600 text-sm transition">
                             ‹ Prev
                         </a>
                     <?php endif; ?>
@@ -1134,10 +1011,7 @@ if ($album && !empty($images[0])) {
                     </span>
 
                     <?php if ($page < $totalPages): ?>
-                        <a
-                            href="?album=<?= albumQueryValue($album) ?>&page=<?= $page + 1 ?>"
-                            class="px-3 py-2 rounded-lg bg-gray-900 border border-gray-800 hover:border-gray-600 text-sm transition"
-                        >
+                        <a href="?album=<?= albumQueryValue($album) ?>&page=<?= $page + 1 ?>" class="px-3 py-2 rounded-lg bg-gray-900 border border-gray-800 hover:border-gray-600 text-sm transition">
                             Next ›
                         </a>
                     <?php endif; ?>
@@ -1148,82 +1022,40 @@ if ($album && !empty($images[0])) {
 
             <!-- Lightbox -->
 
-            <div
-                x-show="active !== null"
-                x-cloak
-                @keydown.escape.window="close()"
-                @keydown.arrow-left.window="previous()"
-                @keydown.arrow-right.window="next()"
-                class="fixed inset-0 z-50 bg-black flex flex-col md:flex-row"
-            >
+            <div x-show="active !== null" x-cloak @keydown.escape.window="close()" @keydown.arrow-left.window="previous()" @keydown.arrow-right.window="next()" class="fixed inset-0 z-50 bg-black flex flex-col md:flex-row">
 
                 <!-- Image side -->
-
                 <div class="relative flex-1 min-w-0 flex items-center justify-center bg-black">
 
                     <!-- Close (mobile: top of image area) -->
-
-                    <button
-                        @click="close()"
-                        class="absolute top-4 left-4 z-50 text-white/70 hover:text-white text-2xl leading-none w-10 h-10 flex items-center justify-center rounded-full bg-black/40 hover:bg-black/60 transition"
-                    >
-                        ×
-                    </button>
+                    <button @click="close()" class="absolute top-4 left-4 z-50 text-white/70 hover:text-white text-2xl leading-none w-10 h-10 flex items-center justify-center rounded-full bg-black/40 hover:bg-black/60 transition">×</button>
 
                     <!-- Previous -->
-
-                    <button
-                        @click="previous()"
-                        class="absolute left-2 sm:left-4 z-50 p-3 text-white/70 hover:text-white text-3xl w-10 h-10 flex items-center justify-center rounded-full bg-black/30 hover:bg-black/50 transition"
-                    >
-                        ‹
-                    </button>
+                    <button @click="previous()" class="absolute left-2 sm:left-4 z-50 p-3 text-white/70 hover:text-white text-3xl w-10 h-10 flex items-center justify-center rounded-full bg-black/30 hover:bg-black/50 transition">‹</button>
 
                     <template x-if="active !== null">
-                        <img
-                            :src="images[active]"
-                            class="max-w-full max-h-[50vh] md:max-h-[92vh] object-contain"
-                            :alt="alts[active]"
-                        >
+                        <img :src="images[active]" class="max-w-full max-h-[50vh] md:max-h-[92vh] object-contain" :alt="alts[active]">
                     </template>
 
                     <!-- Next -->
-
-                    <button
-                        @click="next()"
-                        class="absolute right-2 sm:right-4 z-50 p-3 text-white/70 hover:text-white text-3xl w-10 h-10 flex items-center justify-center rounded-full bg-black/30 hover:bg-black/50 transition"
-                    >
-                        ›
-                    </button>
+                    <button @click="next()" class="absolute right-2 sm:right-4 z-50 p-3 text-white/70 hover:text-white text-3xl w-10 h-10 flex items-center justify-center rounded-full bg-black/30 hover:bg-black/50 transition">›</button>
 
                     <!-- Counter -->
-
-                    <div
-                        class="absolute bottom-3 left-1/2 -translate-x-1/2 text-xs text-white/60 md:hidden"
-                        x-text="active !== null ? `${active + 1} / ${images.length}` : ''"
-                    ></div>
+                    <div class="absolute bottom-3 left-1/2 -translate-x-1/2 text-xs text-white/60 md:hidden" x-text="active !== null ? `${active + 1} / ${images.length}` : ''"></div>
 
                 </div>
 
                 <!-- Info sidebar -->
-
                 <template x-if="active !== null">
                     <div class="w-full md:w-[340px] shrink-0 bg-gray-950 border-t md:border-t-0 md:border-l border-gray-800 flex flex-col max-h-[50vh] md:max-h-screen overflow-y-auto">
 
                         <div class="px-5 py-4 border-b border-gray-800 flex items-start justify-between gap-3">
                             <div class="min-w-0">
                                 <h2 class="font-medium text-sm break-words" x-text="names[active]"></h2>
-                                <p
-                                    x-show="metadata[names[active]]?.date"
-                                    x-text="metadata[names[active]]?.date"
-                                    class="text-xs text-gray-500 mt-1"
-                                ></p>
+                                <p x-show="metadata[names[active]]?.date" x-text="metadata[names[active]]?.date" class="text-xs text-gray-500 mt-1"></p>
                             </div>
 
-                            <span
-                                class="shrink-0 text-xs text-gray-500 hidden md:block"
-                                x-text="`${active + 1} / ${images.length}`"
-                            ></span>
+                            <span class="shrink-0 text-xs text-gray-500 hidden md:block" x-text="`${active + 1} / ${images.length}`"></span>
                         </div>
 
                         <dl class="px-5 py-4 space-y-3 text-sm">
@@ -1271,28 +1103,8 @@ if ($album && !empty($images[0])) {
                         </dl>
 
                         <div class="mt-auto px-5 py-4 border-t border-gray-800 flex flex-col gap-2">
-
-                            <a
-                                x-show="metadata[names[active]]?.gps_url"
-                                :href="metadata[names[active]]?.gps_url"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                class="flex items-center justify-center gap-2 text-sm font-medium text-gray-200 bg-gray-800 hover:bg-gray-700 rounded-lg px-4 py-2 transition"
-                            >
-                                📍 View on map
-                            </a>
-
-                            <a
-                                :href="downloadUrl(active)"
-                                class="flex items-center justify-center gap-2 text-sm font-medium text-gray-200 bg-gray-800 hover:bg-gray-700 rounded-lg px-4 py-2 transition"
-                            >
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-download" viewBox="0 0 16 16">
-                                    <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5"/>
-                                    <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708z"/>
-                                </svg>
-                                Download original
-                            </a>
-
+                            <a x-show="metadata[names[active]]?.gps_url" :href="metadata[names[active]]?.gps_url" target="_blank" rel="noopener noreferrer" class="flex items-center justify-center gap-2 text-sm font-medium text-gray-200 bg-gray-800 hover:bg-gray-700 rounded-lg px-4 py-2 transition">📍 View on map</a>
+                            <a :href="downloadUrl(active)" class="flex items-center justify-center gap-2 text-sm font-medium text-gray-200 bg-gray-800 hover:bg-gray-700 rounded-lg px-4 py-2 transition"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-download" viewBox="0 0 16 16"><path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5"/><path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708z"/></svg>Download original</a>
                         </div>
 
                     </div>
@@ -1327,9 +1139,6 @@ function gallery() {
             JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
         ) ?>,
 
-        // Metadata (EXIF/GPS) is fetched on demand per photo — see
-        // fetchMetadata() — rather than computed for the whole grid
-        // up front, since it can require running exiftool per photo.
         metadata: {},
 
         init() {
@@ -1407,11 +1216,7 @@ function gallery() {
 }
 </script>
 
-<style>
-[x-cloak] {
-    display: none !important;
-}
-</style>
+<style>[x-cloak] { display: none !important; }</style>
 
 </body>
 </html>
