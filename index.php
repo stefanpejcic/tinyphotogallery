@@ -376,21 +376,15 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
 {
     $albumFsPath = str_replace('/', DIRECTORY_SEPARATOR, $album);
     $srcPath = $photosDir . DIRECTORY_SEPARATOR . $albumFsPath . DIRECTORY_SEPARATOR . $image;
-    $cacheDir = $photosDir . DIRECTORY_SEPARATOR . '.thumbs' . DIRECTORY_SEPARATOR . $albumFsPath;
+    $cacheDir = $photosDir . DIRECTORY_SEPARATOR . '.thumbs' . DIRECTORY_SEPARATOR . $maxDim . '_' . $quality . DIRECTORY_SEPARATOR . $albumFsPath;
     $originalUrl = albumFileUrl($photosUrl, $album, $image);
 
-    $prefix = $maxDim . '_' . $quality . '_' . md5($image);
-    $cacheKey = $prefix . '_' . filemtime($srcPath);
-    $cacheFile = $cacheDir . DIRECTORY_SEPARATOR . $cacheKey . '.jpg';
-    $cacheUrl = albumFileUrl($photosUrl, '.thumbs/' . $album, $cacheKey . '.jpg');
+    $cacheFile = $cacheDir . DIRECTORY_SEPARATOR . $image;
+    $cacheUrl = albumFileUrl($photosUrl, '.thumbs/' . $maxDim . '_' . $quality . '/' . $album, $image);
 
-    if (is_file($cacheFile)) { return $cacheUrl; }
+    if (is_file($cacheFile) && filemtime($cacheFile) >= filemtime($srcPath)) { return $cacheUrl; }
     if (!function_exists('imagecreatetruecolor')) { return $originalUrl; }
     if (!is_dir($cacheDir)) { @mkdir($cacheDir, 0755, true); }
-
-    foreach (glob($cacheDir . DIRECTORY_SEPARATOR . $prefix . '_*.jpg') ?: [] as $staleFile) {
-        if ($staleFile !== $cacheFile) { @unlink($staleFile); }
-    }
 
     $info = @getimagesize($srcPath);
     if (!$info) { return $originalUrl; }
@@ -424,7 +418,7 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
     $dstHeight = max(1, (int) round($srcHeight * $ratio));
 
     $dest = imagecreatetruecolor($dstWidth, $dstHeight);
-    imagefill($dest, 0, 0, imagecolorallocate($dest, 17, 24, 39)); // gray-900 bg for transparent PNGs
+    imagefill($dest, 0, 0, imagecolorallocate($dest, 17, 24, 39));
     imagecopyresampled($dest, $source, 0, 0, 0, 0, $dstWidth, $dstHeight, $srcWidth, $srcHeight);
     imagejpeg($dest, $cacheFile, $quality);
 
