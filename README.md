@@ -5,48 +5,37 @@ A photo gallery in a single PHP file. No database, no build step, no dependencie
 ![PHP](https://img.shields.io/badge/PHP-8.1%2B-777bb4)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
+## Screenshots
 
 <table>
 <tr>
 <td width="50%">
-
-### Albums
-
-<img width="953" height="1047" alt="slika" src="https://github.com/user-attachments/assets/f04335f2-b4a1-41ce-8f15-c6060fb90aab" />
-
+<img width="953" height="1047" alt="Albums" src="https://github.com/user-attachments/assets/f04335f2-b4a1-41ce-8f15-c6060fb90aab" />
 </td>
 <td width="50%">
-    
-### Single photo
-
-<img width="953" height="1047" alt="slika" src="https://github.com/user-attachments/assets/7bf0431d-d005-4963-847d-281b4352fcf9" />
-
+<img width="953" height="1047" alt="Single photo" src="https://github.com/user-attachments/assets/7bf0431d-d005-4963-847d-281b4352fcf9" />
 </td>
 </tr>
 </table>
 
-
-
-
-
 ## Features
 
-- **Zero setup**: one file, no composer, no database. Just PHP + GD.
-- **Folder-based albums**: every subfolder in `photos/` becomes an album, with unlimited nesting.
-- **Fast on large albums**: thumbnails are generated on demand and cached to disk; only images that actually scroll into view (or are opened) ever get processed. A 1,000-photo album doesn't resize 1,000 photos on page load.
-- **Direct photo links**: every photo has a shareable `#filename` URL that deep-links straight into the lightbox, without loading the rest of the grid.
-- **EXIF metadata**: camera, focal length, aperture, shutter speed, ISO, dimensions, file size, and GPS location (with a map link), shown per-photo in the lightbox. Uses `exiftool` if available, falls back to PHP's built-in `exif_read_data`.
-- **Optional password protection**: single shared password, hashed, with basic rate-limiting on attempts.
-- **Optional search engine indexing**: off by default (`noindex`); flip one config value to allow indexing.
-- **Downloads**: one-click original file download from the lightbox.
-- **Pagination**: configurable photos-per-page for big albums.
-- **SEO/social basics**: meta description, canonical URL, Open Graph tags with a cover image.
+* **Zero setup**: one file, no composer, no database. Just PHP + GD.
+* **Folder-based albums**: every subfolder in `photos/` becomes an album, with unlimited nesting.
+* **Fast on large albums**: thumbnails are generated on demand and cached to disk; only images that actually scroll into view (or are opened) ever get processed. A 1,000-photo album doesn't resize 1,000 photos on page load.
+* **Direct photo links**: every photo has a shareable `#filename` URL that deep-links straight into the lightbox, without loading the rest of the grid.
+* **EXIF metadata**: camera, focal length, aperture, shutter speed, ISO, dimensions, file size, and GPS location (with a map link), shown per-photo in the lightbox. Uses `exiftool` if available, falls back to PHP's built-in `exif_read_data`.
+* **Optional password protection**: single shared password, hashed, with basic rate-limiting on attempts.
+* **Optional search engine indexing**: off by default (`noindex`); flip one config value to allow indexing.
+* **Downloads**: one-click original file download from the lightbox.
+* **Pagination**: configurable photos-per-page for big albums.
+* **SEO/social basics**: meta description, canonical URL, Open Graph tags with a cover image.
 
 ## Requirements
 
-- PHP 8.1+
-- GD extension (for thumbnail generation)
-- *Optional:* `exif_read_data` (usually bundled) or [`exiftool`](https://exiftool.org/) on the server `PATH` for richer/faster metadata
+* PHP 8.1+
+* GD extension (for thumbnail generation)
+* *Optional:* `exif_read_data` (usually bundled) or [`exiftool`](https://exiftool.org/) on the server `PATH` for richer/faster metadata
 
 ## Installation
 
@@ -55,7 +44,7 @@ A photo gallery in a single PHP file. No database, no build step, no dependencie
 3. Add subfolders — each one is an album. Put images inside (`jpg`, `jpeg`, `png`, `gif`, `webp`, `avif`).
 4. Visit the site. That's it.
 
-```
+```text
 your-site/
 ├── index.php
 └── photos/
@@ -99,7 +88,19 @@ Leave it as `null` to disable the password wall entirely.
 
 ## How thumbnails work
 
-Thumbnails are generated the first time they're requested and cached under `photos/.thumbs/`, mirroring your album structure. Three fixed sizes are used (grid, album-cover, lightbox) so nothing arbitrary can be requested. Combined with native `loading="lazy"` on the `<img>` tags, only photos that are actually visible (or actually opened) ever get resized. You can safely delete `photos/.thumbs/` at any time; it will be rebuilt automatically, and orphaned thumbnails (source photo deleted) are cleaned up automatically in the background.
+Thumbnails are generated the first time they're requested and cached under `photos/.thumbs/`, mirroring your album structure. Three fixed sizes are used (grid, album-cover, lightbox) so nothing arbitrary can be requested. Combined with native `loading="lazy"` on the `<img>` tags, only photos that are actually visible (or actually opened) ever get resized.
+
+You can safely delete `photos/.thumbs/` at any time; it will be rebuilt automatically, and orphaned thumbnails (source photo deleted) are cleaned up automatically in the background.
+
+## Why I made this
+
+I became a father and wanted a simple way to self-host photo albums for my daughter, **Dorotea**.
+
+I looked at existing photo gallery software, but I didn't want another application to maintain, update, configure, or learn just to store and browse family photos. I wanted something much simpler: **Create a folder, upload photos, and that's it.**
+
+So I made `tinyphotogallery` around that idea. The folders are the albums, the images are the content, and everything else should just work. No database, no admin panel, no build process, and no ongoing maintenance beyond keeping PHP itself up to date.
+
+It's intentionally small and boring - which is exactly what I wanted for something that should quietly hold our family photos for years.
 
 ## License
 
