@@ -14,6 +14,7 @@ $config = [
 error_reporting(E_ALL);
 ini_set('display_errors', $config['debug'] ? '1' : '0');
 ini_set('log_errors', '1');
+ini_set('memory_limit', '256M');
 
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: SAMEORIGIN');
@@ -342,6 +343,10 @@ function formatBytes(?int $bytes): ?string
     return rtrim(rtrim(number_format($value, 1), '0'), '.') . ' ' . $units[$i];
 }
 
+// Cleans up cached thumbnails whose source photo no longer exists.
+// Cache layout is now .thumbs/{maxDim}_{quality}/{album}/{filename} —
+// same filename as the original, so this just checks each file exists
+// in its corresponding album folder.
 function cleanupOrphanedThumbnails(string $photosDir, array $allowedExtensions): void
 {
     $thumbsRoot = $photosDir . DIRECTORY_SEPARATOR . '.thumbs';
@@ -350,28 +355,32 @@ function cleanupOrphanedThumbnails(string $photosDir, array $allowedExtensions):
     $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($thumbsRoot, FilesystemIterator::SKIP_DOTS));
 
     foreach ($iterator as $fileInfo) {
-        if (!$fileInfo->isFile() || $fileInfo->getExtension() !== 'jpg') { continue; }
+        if (!$fileInfo->isFile()) { continue; }
 
-        $relativeAlbumDir = substr($fileInfo->getPath(), strlen($thumbsRoot) + 1);
-        $albumDir = $relativeAlbumDir === '' ? $photosDir : $photosDir . DIRECTORY_SEPARATOR . $relativeAlbumDir;
+        // Path under .thumbs/ is: {maxDim}_{quality}/{album...}/{filename}
+        $relative = substr($fileInfo->getPathname(), strlen($thumbsRoot) + 1);
+        $parts = explode(DIRECTORY_SEPARATOR, $relative);
+        if (count($parts) < 2) { continue; } // malformed/legacy entry
 
-        if (!is_dir($albumDir)) { @unlink($fileInfo->getPathname()); continue; }
-        if (!preg_match('/^\d+_\d+_([a-f0-9]{32})_\d+\.jpg$/', $fileInfo->getFilename(), $m)) { continue; }
+        array_shift($parts); // drop the {maxDim}_{quality} segment
+        $filename = array_pop($parts);
+        $albumRelDir = implode(DIRECTORY_SEPARATOR, $parts);
+        $albumDir = $albumRelDir === '' ? $photosDir : $photosDir . DIRECTORY_SEPARATOR . $albumRelDir;
 
-        $imageHash = $m[1];
-        $stillExists = false;
-        foreach (imageFiles($albumDir, $allowedExtensions) as $existingImage) {
-            if (md5($existingImage) === $imageHash) { $stillExists = true; break; }
+        if (!is_file($albumDir . DIRECTORY_SEPARATOR . $filename)) {
+            @unlink($fileInfo->getPathname());
         }
-
-        if (!$stillExists) { @unlink($fileInfo->getPathname()); }
     }
 }
 
 // Generates (and disk-caches) a resized/compressed JPEG copy of a photo.
-// Only ever called for the grid thumbnail up front; the larger lightbox
-// version is generated lazily via the AJAX metadata endpoint, only for
-// the photo actually opened — see the ajax_metadata handler below.
+// Cache path mirrors the original: .thumbs/{maxDim}_{quality}/{album}/{filename}
+// — same filename as the source (not a hash), which keeps URL structure
+// consistent with the working photos/ path and avoids server/proxy
+// path-encoding quirks some hosts hit on hashed filenames.
+// Only the grid thumbnail is generated eagerly on page load; the larger
+// lightbox version is generated lazily via the ajax_metadata endpoint,
+// only for the photo actually opened.
 function thumbnailUrl(string $photosUrl, string $photosDir, string $album, string $image, int $maxDim, int $quality): string
 {
     $albumFsPath = str_replace('/', DIRECTORY_SEPARATOR, $album);
@@ -382,7 +391,11 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
     $cacheFile = $cacheDir . DIRECTORY_SEPARATOR . $image;
     $cacheUrl = albumFileUrl($photosUrl, '.thumbs/' . $maxDim . '_' . $quality . '/' . $album, $image);
 
-    if (is_file($cacheFile) && filemtime($cacheFile) >= filemtime($srcPath)) { return $cacheUrl; }
+    if (is_file($cacheFile) && filemtime($cacheFile) >= filemtime($srcPath)) {
+        if (filesize($cacheFile) > 0) { return $cacheUrl; }
+        @unlink($cacheFile); // corrupt/truncated write from a previous request — regenerate below
+    }
+
     if (!function_exists('imagecreatetruecolor')) { return $originalUrl; }
     if (!is_dir($cacheDir)) { @mkdir($cacheDir, 0755, true); }
 
@@ -418,12 +431,21 @@ function thumbnailUrl(string $photosUrl, string $photosDir, string $album, strin
     $dstHeight = max(1, (int) round($srcHeight * $ratio));
 
     $dest = imagecreatetruecolor($dstWidth, $dstHeight);
-    imagefill($dest, 0, 0, imagecolorallocate($dest, 17, 24, 39));
+    imagefill($dest, 0, 0, imagecolorallocate($dest, 17, 24, 39)); // gray-900 bg for transparent PNGs
     imagecopyresampled($dest, $source, 0, 0, 0, 0, $dstWidth, $dstHeight, $srcWidth, $srcHeight);
-    imagejpeg($dest, $cacheFile, $quality);
+    $wrote = imagejpeg($dest, $cacheFile, $quality);
 
     imagedestroy($source);
     imagedestroy($dest);
+
+    // Validate the write actually succeeded and produced a real file —
+    // a failed/interrupted write (memory limit, disk full, concurrent
+    // request) should fall back to serving the original, not a broken
+    // or empty cached file.
+    if (!$wrote || !is_file($cacheFile) || filesize($cacheFile) === 0) {
+        @unlink($cacheFile);
+        return $originalUrl;
+    }
 
     return $cacheUrl;
 }
@@ -482,6 +504,8 @@ if ($album !== null) {
     if (isset($_GET['ajax_metadata'])) {
         $requestedFile = basename((string) $_GET['ajax_metadata']);
         header('Content-Type: application/json');
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+        header('X-LiteSpeed-Cache-Control: no-cache');
 
         if (!in_array($requestedFile, $images, true)) {
             http_response_code(404);
